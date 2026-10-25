@@ -1,7 +1,12 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
-    "dev": { "cache": false, "persistent": true },
+    "dev": {
+      "dependsOn": ["^build"],
+      "env": ["DATABASE_URL", "API_HOST", "API_PORT", "NEXT_PUBLIC_API_URL"],
+      "cache": false,
+      "persistent": true
+    },
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**", ".next/**", "!.next/cache/**"] },
     "lint": {},
     "typecheck": { "dependsOn": ["^build"] },
