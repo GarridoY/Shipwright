@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: shipwright
+      POSTGRES_USER: shipwright
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shipwright_dev}
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - shipwright-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U shipwright -d shipwright']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  shipwright-postgres:

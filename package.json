@@ -1,0 +1,33 @@
+{
+  "name": "shipwright",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.6.5",
+  "engines": {
+    "node": ">=22.14.0 <23"
+  },
+  "scripts": {
+    "dev": "dotenv -e .env -- turbo dev",
+    "build": "turbo build",
+    "lint": "eslint .",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "db:up": "docker compose -f infrastructure/docker/compose.yaml up -d postgres",
+    "db:down": "docker compose -f infrastructure/docker/compose.yaml down",
+    "db:up:podman": "podman compose -f infrastructure/docker/compose.yaml up -d postgres",
+    "db:down:podman": "podman compose -f infrastructure/docker/compose.yaml down",
+    "db:migrate": "dotenv -e .env -- corepack pnpm --filter @shipwright/database migrate"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "dotenv-cli": "^8.0.0",
+    "eslint": "^9.22.0",
+    "globals": "^16.0.0",
+    "prettier": "^3.5.3",
+    "turbo": "^2.4.4",
+    "typescript": "~5.8.2",
+    "typescript-eslint": "^8.26.0",
+    "vitest": "^3.0.8"
+  }
+}

@@ -2,7 +2,7 @@
 
 > A local-first, opinionated control plane for personal software development with autonomous coding agents and explicit human approval at privilege boundaries.
 
-**Status:** Design / pre-MVP. This repository describes an intended system; features listed below are not yet implemented.
+**Status:** Foundation / pre-MVP. The local monorepo foundation is runnable; product workflows are not yet implemented.
 
 ## Vision
 
@@ -106,18 +106,39 @@ The UI additionally derives *activity* (editing, testing, reading) and *attentio
 
 ## Repository layout
 
-The intended structure is defined in [issue 001: Bootstrap monorepo](docs/backlog/001-bootstrap-monorepo.md). Folders should be added when they contain useful code; don't create empty packages solely to mirror the target tree.
+The initial runnable structure follows [issue 001: Bootstrap monorepo](https://github.com/GarridoY/Shipwright/issues/1). Folders should be added when they contain useful code; don't create empty packages solely to mirror the target tree.
 
 ## Development status and setup
 
-This starter pack contains **documentation and GitHub issue drafts**, not yet a runnable application. Until the bootstrap issue is implemented, there are no working `dev`, `test`, or migration commands. The future bootstrap should document prerequisites (Node LTS, pnpm, Docker, Git), environment setup, one-command startup, and tests in this section.
+### Prerequisites
+
+- Node.js 22.14.0 (see `.node-version`)
+- pnpm 10.6.5 (Corepack is recommended)
+- Docker Engine/Desktop with Compose v2, or Podman with a Compose provider
+- Git
+
+From the repository root, copy `.env.example` to `.env`, then install and start the local services:
+
+```sh
+corepack enable
+pnpm install
+pnpm db:up
+pnpm db:migrate
+pnpm dev
+```
+
+The web app is available at <http://localhost:3000>, and the API health endpoint at <http://127.0.0.1:4000/health>. The worker runs alongside them and exits cleanly on Ctrl+C. The health endpoint checks PostgreSQL connectivity. Use `pnpm db:down` to stop the database. With Podman, use `pnpm db:up:podman` and `pnpm db:down:podman` instead.
+
+Run the repository checks with `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test`. `pnpm db:migrate` applies checked-in Drizzle SQL migrations to a blank database as well as an existing one. `.env` contains development-only local credentials; do not use them outside local development.
+
+`API_HOST` accepts only loopback addresses (`127.0.0.0/8`, `::1`, or `localhost`, which binds to `127.0.0.1`); a non-loopback value fails at startup. On Windows, run Docker Desktop with the WSL 2 backend or a Podman machine, and execute the pnpm commands in PowerShell, Windows Terminal, or a WSL shell. Compose requires Docker Compose v2 or a Podman Compose provider. Remote access is not configured; the API listens on loopback.
 
 ## Planning and contributions
 
 - Read [AGENTS.md](AGENTS.md) before making changes.
 - Architectural decisions are recorded under [docs/decisions](docs/decisions).
-- The prioritized issue drafts are under [docs/backlog](docs/backlog), with a [backlog index](docs/backlog/README.md).
-- Start with issue 001 and follow its dependencies.
+- The prioritized issues are tracked in [GitHub Issues](https://github.com/GarridoY/Shipwright/issues).
+- Start with [issue 001](https://github.com/GarridoY/Shipwright/issues/1) and follow its dependencies.
 - Each change should provide tests and evidence against the relevant issue's acceptance criteria.
 
 ## Non-goals for MVP
