@@ -131,7 +131,7 @@ The web app is available at <http://localhost:3000>, and the API health endpoint
 
 Run the repository checks with `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test`. `pnpm db:migrate` applies checked-in Drizzle SQL migrations to a blank database as well as an existing one. `.env` contains development-only local credentials; do not use them outside local development.
 
-On Windows, run Docker Desktop with the WSL 2 backend or a Podman machine, and execute the pnpm commands in PowerShell, Windows Terminal, or a WSL shell. Compose requires Docker Compose v2 or a Podman Compose provider. Remote access is not configured; the API listens on loopback.
+`API_HOST` accepts only loopback addresses (`127.0.0.0/8`, `::1`, or `localhost`, which binds to `127.0.0.1`); a non-loopback value fails at startup. On Windows, run Docker Desktop with the WSL 2 backend or a Podman machine, and execute the pnpm commands in PowerShell, Windows Terminal, or a WSL shell. Compose requires Docker Compose v2 or a Podman Compose provider. Remote access is not configured; the API listens on loopback.
 
 ## Planning and contributions
 
