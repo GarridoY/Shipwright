@@ -35,8 +35,10 @@ Review the requested PR against the repository's requirements and current state.
 - Group related details into one finding; keep independent findings separate. Do not post duplicate feedback if the same unresolved issue is already clearly documented; add a follow-up only if it contributes new evidence or clarification.
 - If the user asks whether it is ready to merge, and the review finds no remaining actionable issues, post a structured **Ready to merge** comment. State that this is based on the review and accurately summarize check status. Do not call it merge-ready if required checks are failing/pending, the PR is draft, conflicts exist, or important acceptance criteria remain unverified; say what is still blocking instead.
 - If the user asks to comment only when something needs addressing, do not post a no-findings/merge-ready comment unless they also ask for merge readiness or a status report.
-- Use `gh pr comment <number> --body ...` for discussion comments. Do not submit an approval, request-changes review, or merge the PR unless explicitly requested.
-- If posting fails or `gh` is not authenticated, report that and provide the ready-to-post comment text. Never imply a comment was posted unless the command returned its URL.
+- For multiline discussion comments, write the intended Markdown to a UTF-8 temporary body file and use `gh pr comment <number> --body-file <path>`. Keep the file out of the repository (or remove it after use). Do not embed a multiline Markdown body in a shell command string: quoting and escape rules differ between shells and can silently alter content.
+- After posting or editing, use the returned comment URL to fetch the comment body from GitHub (for example, `gh api repos/{owner}/{repo}/issues/comments/{comment_id} --jq .body`) and compare it with the intended text. If the body is truncated or altered, correct it and verify again before reporting success.
+- Do not submit an approval, request-changes review, or merge the PR unless explicitly requested.
+- If posting fails or `gh` is not authenticated, report that and provide the ready-to-post comment text. Never imply a comment was posted unless the returned comment body was fetched and verified.
 
 ## Reporting back
 
