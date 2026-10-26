@@ -6,10 +6,14 @@ import type { HealthResponse } from '@shipwright/contracts';
 type HealthState =
   { kind: 'loading' } | { kind: 'ready'; health: HealthResponse } | { kind: 'failed' };
 type Project = { id: string; name: string; repositoryPath: string; currentBranch: string | null };
+type AgentDefinition = { id: string; name: string; version: number; runtime: string };
+type Runtime = { id: string; capabilities: string[] };
 
 export default function Home() {
   const [health, setHealth] = useState<HealthState>({ kind: 'loading' });
   const [projects, setProjects] = useState<Project[]>([]);
+  const [definitions, setDefinitions] = useState<AgentDefinition[]>([]);
+  const [runtimes, setRuntimes] = useState<Runtime[]>([]);
   const [projectError, setProjectError] = useState('');
   const [saving, setSaving] = useState(false);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:4000';
@@ -28,6 +32,18 @@ export default function Home() {
         setProjects(await response.json() as Project[]);
       })
       .catch(() => setProjectError('Unable to load projects.'));
+    fetch(`${apiUrl}/api/agent-definitions`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Agent definition request failed');
+        setDefinitions(await response.json() as AgentDefinition[]);
+      })
+      .catch(() => setProjectError('Unable to load agent definitions.'));
+    fetch(`${apiUrl}/api/runtimes`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Runtime request failed');
+        setRuntimes(await response.json() as Runtime[]);
+      })
+      .catch(() => setProjectError('Unable to load runtimes.'));
   }, []);
 
   async function registerProject(event: React.FormEvent<HTMLFormElement>) {
@@ -48,6 +64,55 @@ export default function Home() {
       formElement.reset();
     } catch (error) {
       setProjectError(error instanceof Error ? error.message : 'Unable to register project');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createDefinition(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setSaving(true);
+    setProjectError('');
+    try {
+      const response = await fetch(`${apiUrl}/api/agent-definitions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: form.get('definitionName'), runtime: form.get('definitionRuntime') }),
+      });
+      const body = await response.json() as AgentDefinition | { error: string };
+      if (!response.ok) throw new Error('error' in body ? body.error : 'Unable to create definition');
+      setDefinitions((current) => [...current, body as AgentDefinition]);
+      formElement.reset();
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : 'Unable to create definition');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createTask(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setSaving(true);
+    setProjectError('');
+    try {
+      const response = await fetch(`${apiUrl}/api/tasks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          projectId: form.get('projectId'), title: form.get('title'), objective: form.get('objective'),
+          acceptanceCriteria: String(form.get('acceptanceCriteria')).split('\n').map((item) => item.trim()).filter(Boolean),
+          agentDefinitionId: form.get('agentDefinitionId'),
+        }),
+      });
+      const body = await response.json() as { id?: string; error?: string };
+      if (!response.ok || !body.id) throw new Error(body.error ?? 'Unable to create task');
+      window.location.assign(`/tasks/${encodeURIComponent(body.id)}`);
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : 'Unable to create task');
     } finally {
       setSaving(false);
     }
@@ -74,9 +139,30 @@ export default function Home() {
         <button type="submit" disabled={saving}>{saving ? 'Registering…' : 'Register project'}</button>
       </form>
       {projectError && <p role="alert">{projectError}</p>}
+      <h2>Agent definitions</h2>
+      <form onSubmit={createDefinition}>
+        <label>Definition name <input name="definitionName" required maxLength={200} /></label>
+        <label>Runtime <select name="definitionRuntime" required defaultValue="">
+          <option value="" disabled>Select a runtime</option>
+          {runtimes.map((runtime) => <option key={runtime.id} value={runtime.id}>{runtime.id}</option>)}
+        </select></label>
+        <button type="submit" disabled={saving || runtimes.length === 0}>{saving ? 'Creating…' : 'Create definition'}</button>
+      </form>
+      {definitions.length === 0 && <p>No agent definitions yet. Create one to add a task.</p>}
       {projects.length === 0 ? <p>No projects registered.</p> : (
         <ul>{projects.map((project) => <li key={project.id}>
           <strong>{project.name}</strong> — {project.repositoryPath} (branch: {project.currentBranch ?? 'detached'})
+          <form onSubmit={createTask}>
+            <input type="hidden" name="projectId" value={project.id} />
+            <label>Task title <input name="title" required maxLength={200} /></label>
+            <label>Objective <textarea name="objective" required maxLength={20000} /></label>
+            <label>Acceptance criteria (one per line) <textarea name="acceptanceCriteria" required /></label>
+            <label>Agent definition <select name="agentDefinitionId" required defaultValue="">
+              <option value="" disabled>Select a definition</option>
+              {definitions.map((definition) => <option key={definition.id} value={definition.id}>{definition.name} v{definition.version} ({definition.runtime})</option>)}
+            </select></label>
+            <button type="submit" disabled={saving || definitions.length === 0}>Create task</button>
+          </form>
         </li>)}</ul>
       )}
     </main>

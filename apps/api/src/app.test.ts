@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildApi } from './app.js';
+import { buildApi, type TaskRecord } from './app.js';
 import { resolveApiHost } from './config.js';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -45,6 +45,9 @@ afterEach(async () => {
 });
 
 function projectDependencies() {
+  const taskRecords = new Map<string, TaskRecord>();
+  const workItemOwners = new Map<string, string>();
+  const definitionId = randomUUID();
   return {
     checkDatabase: async () => undefined,
     allowedProjectRoots: [root],
@@ -60,6 +63,41 @@ function projectDependencies() {
         return record;
       },
     },
+    tasks: {
+      async create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>) {
+        const now = new Date();
+        const task = { ...input, id: randomUUID(), status: 'ready', createdAt: now, updatedAt: now, runs: [] };
+        taskRecords.set(task.id, task);
+        return task;
+      },
+      async workItemBelongsToProject(workItemId: string, projectId: string) {
+        return workItemOwners.get(workItemId) === projectId;
+      },
+      async get(id: string) { return taskRecords.get(id) ?? null; },
+      async startRun(id: string, capabilities: readonly string[] | undefined) {
+        const task = taskRecords.get(id);
+        if (!task) return { kind: 'not_found' as const };
+        if (!task.agentDefinitionId || !task.runtime) return { kind: 'definition_required' as const };
+        if (!capabilities) return { kind: 'capability_mismatch' as const };
+        if (task.runs.some((run) => ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'].includes(run.status))) return { kind: 'active' as const };
+        const run = { id: randomUUID(), taskId: id, attempt: task.runs.length + 1, status: 'queued', agentDefinitionId: task.agentDefinitionId, runtime: task.runtime, createdAt: new Date() };
+        task.runs.push(run);
+        return { kind: 'created' as const, run };
+      },
+    },
+    agentDefinitions: {
+      async list() { return [{ id: definitionId, name: 'Test definition', version: 1, runtime: 'fake', configuration: { requiredCapabilities: [] }, createdAt: new Date() }]; },
+      async create(input: { name: string; runtime: string; configuration: Record<string, unknown> }) {
+        return { ...input, id: randomUUID(), version: 1, createdAt: new Date() };
+      },
+    },
+    runtimes: {
+      list() { return [{ id: 'fake', capabilities: [] }]; },
+      get(id: string) { return id === 'fake' ? { id: 'fake', capabilities: [] } : undefined; },
+    },
+    definitionId,
+    workItemOwners,
+    taskCount: () => taskRecords.size,
   };
 }
 
@@ -146,5 +184,92 @@ describe('GET /health', () => {
       database: 'disconnected',
     });
     expect(response.body).not.toContain('sensitive connection detail');
+  });
+
+  it('creates, reads, and explicitly starts separate task attempts', async () => {
+    const dependencies = projectDependencies();
+    const app = await buildApi(dependencies);
+    apps.push(app);
+    const created = await app.inject({ method: 'POST', url: '/api/tasks', payload: {
+      projectId: randomUUID(), title: 'Implement feature', objective: 'Add the feature', acceptanceCriteria: ['It works'], agentDefinitionId: dependencies.definitionId,
+    } });
+    expect(created.statusCode).toBe(201);
+    const task = created.json();
+    expect(task.status).toBe('ready');
+    expect(task.runs).toEqual([]);
+    const first = await app.inject({ method: 'POST', url: `/api/tasks/${task.id}/runs` });
+    expect(first.statusCode).toBe(202);
+    expect(first.json().attempt).toBe(1);
+    const detail = await app.inject({ method: 'GET', url: `/api/tasks/${task.id}` });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().runs).toHaveLength(1);
+    const duplicate = await app.inject({ method: 'POST', url: `/api/tasks/${task.id}/runs` });
+    expect(duplicate.statusCode).toBe(409);
+  });
+
+  it('rejects invalid task criteria and returns 404 for missing task detail', async () => {
+    const app = await buildApi(projectDependencies());
+    apps.push(app);
+    const invalid = await app.inject({ method: 'POST', url: '/api/tasks', payload: {
+      projectId: randomUUID(), title: 'Invalid', objective: 'Objective', acceptanceCriteria: [''], agentDefinitionId: randomUUID(),
+    } });
+    expect(invalid.statusCode).toBe(400);
+    const missing = await app.inject({ method: 'GET', url: `/api/tasks/${randomUUID()}` });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it('allows users to create and list definitions for available runtimes', async () => {
+    const app = await buildApi(projectDependencies());
+    apps.push(app);
+    expect((await app.inject({ method: 'GET', url: '/api/runtimes' })).json()).toEqual([{ id: 'fake', capabilities: [] }]);
+    const created = await app.inject({ method: 'POST', url: '/api/agent-definitions', payload: { name: 'Browser definition', runtime: 'fake' } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().runtime).toBe('fake');
+    expect((await app.inject({ method: 'GET', url: '/api/agent-definitions' })).statusCode).toBe(200);
+  });
+
+  it('rejects run launch when the selected runtime adapter has no capability declaration', async () => {
+    const dependencies = projectDependencies();
+    const app = await buildApi({ ...dependencies, runtimes: { ...dependencies.runtimes, get: () => undefined } });
+    apps.push(app);
+    const created = await app.inject({ method: 'POST', url: '/api/tasks', payload: {
+      projectId: randomUUID(), title: 'Fail closed', objective: 'Do not launch without adapter capabilities', acceptanceCriteria: ['No run created'], agentDefinitionId: dependencies.definitionId,
+    } });
+    const taskId = created.json().id as string;
+    const launch = await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/runs` });
+    expect(launch.statusCode).toBe(422);
+    expect((await app.inject({ method: 'GET', url: `/api/tasks/${taskId}` })).json().runs).toHaveLength(0);
+  });
+
+  it('preserves legacy tasks without a definition and gives a clear launch response', async () => {
+    const dependencies = projectDependencies();
+    const legacyTask: TaskRecord = {
+      id: randomUUID(), projectId: randomUUID(), workItemId: null, title: 'Legacy task', objective: 'Existing objective',
+      acceptanceCriteria: ['Existing criterion'], status: 'ready', agentDefinitionId: null, runtime: null,
+      createdAt: new Date(), updatedAt: new Date(), runs: [],
+    };
+    dependencies.tasks.get = async (id: string) => id === legacyTask.id ? legacyTask : null;
+    const app = await buildApi(dependencies);
+    apps.push(app);
+    const launch = await app.inject({ method: 'POST', url: `/api/tasks/${legacyTask.id}/runs` });
+    expect(launch.statusCode).toBe(409);
+    expect(launch.json().error).toContain('Select an agent definition');
+    expect(legacyTask.runs).toHaveLength(0);
+  });
+
+  it('accepts same-project work items and rejects cross-project associations', async () => {
+    const dependencies = projectDependencies();
+    const projectId = randomUUID();
+    const otherProjectId = randomUUID();
+    const workItemId = randomUUID();
+    dependencies.workItemOwners.set(workItemId, projectId);
+    const app = await buildApi(dependencies);
+    apps.push(app);
+    const base = { title: 'Scoped task', objective: 'Keep associations consistent', acceptanceCriteria: ['Project matches'], agentDefinitionId: dependencies.definitionId, workItemId };
+    const sameProject = await app.inject({ method: 'POST', url: '/api/tasks', payload: { ...base, projectId } });
+    expect(sameProject.statusCode).toBe(201);
+    const otherProject = await app.inject({ method: 'POST', url: '/api/tasks', payload: { ...base, projectId: otherProjectId } });
+    expect(otherProject.statusCode).toBe(400);
+    expect(dependencies.taskCount()).toBe(1);
   });
 });
