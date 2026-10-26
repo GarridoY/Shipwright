@@ -53,6 +53,32 @@ export default function Home() {
     }
   }
 
+  async function createTask(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setSaving(true);
+    setProjectError('');
+    try {
+      const response = await fetch(`${apiUrl}/api/tasks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          projectId: form.get('projectId'), title: form.get('title'), objective: form.get('objective'),
+          acceptanceCriteria: String(form.get('acceptanceCriteria')).split('\n').map((item) => item.trim()).filter(Boolean),
+          agentDefinitionId: form.get('agentDefinitionId'), runtime: form.get('runtime'),
+        }),
+      });
+      const body = await response.json() as { id?: string; error?: string };
+      if (!response.ok || !body.id) throw new Error(body.error ?? 'Unable to create task');
+      window.location.assign(`/tasks/${encodeURIComponent(body.id)}`);
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : 'Unable to create task');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <main>
       <h1>Shipwright</h1>
@@ -77,6 +103,15 @@ export default function Home() {
       {projects.length === 0 ? <p>No projects registered.</p> : (
         <ul>{projects.map((project) => <li key={project.id}>
           <strong>{project.name}</strong> — {project.repositoryPath} (branch: {project.currentBranch ?? 'detached'})
+          <form onSubmit={createTask}>
+            <input type="hidden" name="projectId" value={project.id} />
+            <label>Task title <input name="title" required maxLength={200} /></label>
+            <label>Objective <textarea name="objective" required maxLength={20000} /></label>
+            <label>Acceptance criteria (one per line) <textarea name="acceptanceCriteria" required /></label>
+            <label>Agent definition ID <input name="agentDefinitionId" required /></label>
+            <label>Runtime <input name="runtime" required maxLength={100} /></label>
+            <button type="submit" disabled={saving}>Create task</button>
+          </form>
         </li>)}</ul>
       )}
     </main>

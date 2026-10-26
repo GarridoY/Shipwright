@@ -1,6 +1,7 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { projects } from './schema/index.js';
+import { agentDefinitions, agentRuns, projects, tasks } from './schema/index.js';
+import { desc, eq } from 'drizzle-orm';
 
 export function createDatabase(databaseUrl: string) {
   const pool = new Pool({ connectionString: databaseUrl });
@@ -16,6 +17,40 @@ export function createDatabase(databaseUrl: string) {
         const [project] = await db.insert(projects).values(input).returning();
         if (!project) throw new Error('Project insert returned no record');
         return project;
+      },
+    },
+    tasks: {
+      async create(input: { projectId: string; workItemId: string | null; title: string; objective: string; acceptanceCriteria: string[]; agentDefinitionId: string; runtime: string }) {
+        const [task] = await db.insert(tasks).values({ ...input, status: 'ready' }).returning();
+        if (!task) throw new Error('Task insert returned no record');
+        return { ...task, runs: [] };
+      },
+      async get(id: string) {
+        const [task] = await db.select().from(tasks).where(eq(tasks.id, id));
+        if (!task) return null;
+        const runs = await db.select().from(agentRuns).where(eq(agentRuns.taskId, id)).orderBy(desc(agentRuns.attempt));
+        return { ...task, runs };
+      },
+      async startRun(taskId: string) {
+        const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
+        if (!task) return { kind: 'not_found' as const };
+        if (task.status !== 'ready') return { kind: 'ineligible' as const };
+        const prior = await db.select().from(agentRuns).where(eq(agentRuns.taskId, taskId));
+        if (prior.some((run) => ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'].includes(run.status))) return { kind: 'active' as const };
+        const [definition] = await db.select().from(agentDefinitions).where(eq(agentDefinitions.id, task.agentDefinitionId));
+        if (!definition || definition.runtime !== task.runtime) return { kind: 'capability_mismatch' as const };
+        const config = definition.configuration;
+        const required = Array.isArray(config.requiredCapabilities) ? config.requiredCapabilities : [];
+        const supported = Array.isArray(config.runtimeCapabilities) ? config.runtimeCapabilities : [];
+        if (!required.every((capability) => typeof capability === 'string' && supported.includes(capability))) return { kind: 'capability_mismatch' as const };
+        try {
+          const [run] = await db.insert(agentRuns).values({ taskId, attempt: prior.reduce((max, item) => Math.max(max, item.attempt), 0) + 1, status: 'queued', agentDefinitionId: task.agentDefinitionId, runtime: task.runtime }).returning();
+          if (!run) throw new Error('Run insert returned no record');
+          return { kind: 'created' as const, run };
+        } catch (error) {
+          if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') return { kind: 'active' as const };
+          throw error;
+        }
       },
     },
     async checkConnection(): Promise<void> {

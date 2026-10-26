@@ -26,6 +26,8 @@ export interface Task {
   title: string;
   objective: string;
   acceptanceCriteria: string[];
+  agentDefinitionId: EntityId;
+  runtime: string;
   status: TaskStatus;
   version: number;
   createdAt: Date;
@@ -56,6 +58,7 @@ export interface AgentRun {
   status: RunStatus;
   version: number;
   agentDefinitionId: EntityId;
+  runtime: string;
   startedAt: Date | null;
   finishedAt: Date | null;
   createdAt: Date;

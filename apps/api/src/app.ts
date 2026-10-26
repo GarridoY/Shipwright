@@ -25,6 +25,38 @@ export interface ApiDependencies {
   checkDatabase(): Promise<void>;
   projects: ProjectStore;
   allowedProjectRoots: string[];
+  tasks: TaskStore;
+}
+
+export interface TaskRecord {
+  id: string;
+  projectId: string;
+  workItemId: string | null;
+  title: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  status: string;
+  agentDefinitionId: string;
+  runtime: string;
+  createdAt: Date;
+  updatedAt: Date;
+  runs: RunRecord[];
+}
+
+export interface RunRecord {
+  id: string;
+  taskId: string;
+  attempt: number;
+  status: string;
+  agentDefinitionId: string;
+  runtime: string;
+  createdAt: Date;
+}
+
+export interface TaskStore {
+  create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>): Promise<TaskRecord>;
+  get(id: string): Promise<TaskRecord | null>;
+  startRun(taskId: string): Promise<{ kind: 'created'; run: RunRecord } | { kind: 'not_found' | 'ineligible' | 'active' | 'capability_mismatch' }>;
 }
 
 export async function buildApi(dependencies: ApiDependencies) {
@@ -98,6 +130,55 @@ export async function buildApi(dependencies: ApiDependencies) {
 
     reply.code(201);
     return { ...project, currentBranch: await readBranch(canonicalPath) };
+  });
+
+  app.post<{ Body: { projectId: string; workItemId?: string | null; title: string; objective: string; acceptanceCriteria: string[]; agentDefinitionId: string; runtime: string } }>('/api/tasks', async (request, reply) => {
+    const body = request.body;
+    if (!body || typeof body.projectId !== 'string' || !body.projectId ||
+        typeof body.title !== 'string' || !body.title.trim() || body.title.trim().length > 200 ||
+        typeof body.objective !== 'string' || !body.objective.trim() || body.objective.trim().length > 20_000 ||
+        !Array.isArray(body.acceptanceCriteria) || body.acceptanceCriteria.length > 100 ||
+        !body.acceptanceCriteria.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 2000) ||
+        typeof body.agentDefinitionId !== 'string' || !body.agentDefinitionId ||
+        typeof body.runtime !== 'string' || !body.runtime.trim() || body.runtime.length > 100 ||
+        (body.workItemId !== undefined && body.workItemId !== null && typeof body.workItemId !== 'string')) {
+      reply.code(400);
+      return { error: 'Invalid task input' };
+    }
+    try {
+      const task = await dependencies.tasks.create({ ...body, title: body.title.trim(), objective: body.objective.trim(), acceptanceCriteria: body.acceptanceCriteria.map((item) => item.trim()), workItemId: body.workItemId ?? null });
+      reply.code(201);
+      return task;
+    } catch {
+      reply.code(400);
+      return { error: 'Task references are invalid or could not be saved' };
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/api/tasks/:id', async (request, reply) => {
+    const task = await dependencies.tasks.get(request.params.id);
+    if (!task) {
+      reply.code(404);
+      return { error: 'Task not found' };
+    }
+    return task;
+  });
+
+  app.post<{ Params: { id: string } }>('/api/tasks/:id/runs', async (request, reply) => {
+    try {
+      const result = await dependencies.tasks.startRun(request.params.id);
+      if (result.kind === 'created') {
+        reply.code(202);
+        return result.run;
+      }
+      const codes = { not_found: 404, ineligible: 409, active: 409, capability_mismatch: 422 } as const;
+      const messages = { not_found: 'Task not found', ineligible: 'Task is not eligible to run', active: 'Task already has an active run', capability_mismatch: 'Runtime does not meet agent definition requirements' } as const;
+      reply.code(codes[result.kind]);
+      return { error: messages[result.kind] };
+    } catch {
+      reply.code(500);
+      return { error: 'Unable to start task run' };
+    }
   });
 
   return app;

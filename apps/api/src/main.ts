@@ -12,7 +12,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535)
 
 const database = createDatabase(databaseUrl);
 const projectRoots = resolveProjectRoots(process.env.PROJECT_ALLOWED_ROOTS);
-const app = await buildApi({ checkDatabase: database.checkConnection, projects: database.projects, allowedProjectRoots: projectRoots });
+const app = await buildApi({ checkDatabase: database.checkConnection, projects: database.projects, tasks: database.tasks, allowedProjectRoots: projectRoots });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {

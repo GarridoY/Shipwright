@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildApi } from './app.js';
+import { buildApi, type TaskRecord } from './app.js';
 import { resolveApiHost } from './config.js';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -45,6 +45,7 @@ afterEach(async () => {
 });
 
 function projectDependencies() {
+  const taskRecords = new Map<string, TaskRecord>();
   return {
     checkDatabase: async () => undefined,
     allowedProjectRoots: [root],
@@ -58,6 +59,22 @@ function projectDependencies() {
         const record = { ...input, id: randomUUID(), createdAt: now, updatedAt: now };
         records.set(record.id, record);
         return record;
+      },
+    },
+    tasks: {
+      async create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>) {
+        const now = new Date();
+        const task = { ...input, id: randomUUID(), status: 'ready', createdAt: now, updatedAt: now, runs: [] };
+        taskRecords.set(task.id, task);
+        return task;
+      },
+      async get(id: string) { return taskRecords.get(id) ?? null; },
+      async startRun(id: string) {
+        const task = taskRecords.get(id);
+        if (!task) return { kind: 'not_found' as const };
+        const run = { id: randomUUID(), taskId: id, attempt: task.runs.length + 1, status: 'queued', agentDefinitionId: task.agentDefinitionId, runtime: task.runtime, createdAt: new Date() };
+        task.runs.push(run);
+        return { kind: 'created' as const, run };
       },
     },
   };
@@ -146,5 +163,34 @@ describe('GET /health', () => {
       database: 'disconnected',
     });
     expect(response.body).not.toContain('sensitive connection detail');
+  });
+
+  it('creates, reads, and explicitly starts separate task attempts', async () => {
+    const app = await buildApi(projectDependencies());
+    apps.push(app);
+    const created = await app.inject({ method: 'POST', url: '/api/tasks', payload: {
+      projectId: randomUUID(), title: 'Implement feature', objective: 'Add the feature', acceptanceCriteria: ['It works'], agentDefinitionId: randomUUID(), runtime: 'fake',
+    } });
+    expect(created.statusCode).toBe(201);
+    const task = created.json();
+    expect(task.status).toBe('ready');
+    expect(task.runs).toEqual([]);
+    const first = await app.inject({ method: 'POST', url: `/api/tasks/${task.id}/runs` });
+    expect(first.statusCode).toBe(202);
+    expect(first.json().attempt).toBe(1);
+    const detail = await app.inject({ method: 'GET', url: `/api/tasks/${task.id}` });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().runs).toHaveLength(1);
+  });
+
+  it('rejects invalid task criteria and returns 404 for missing task detail', async () => {
+    const app = await buildApi(projectDependencies());
+    apps.push(app);
+    const invalid = await app.inject({ method: 'POST', url: '/api/tasks', payload: {
+      projectId: randomUUID(), title: 'Invalid', objective: 'Objective', acceptanceCriteria: [''], agentDefinitionId: randomUUID(), runtime: 'fake',
+    } });
+    expect(invalid.statusCode).toBe(400);
+    const missing = await app.inject({ method: 'GET', url: `/api/tasks/${randomUUID()}` });
+    expect(missing.statusCode).toBe(404);
   });
 });
