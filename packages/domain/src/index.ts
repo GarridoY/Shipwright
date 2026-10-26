@@ -1,1 +1,2 @@
-export const DOMAIN_PACKAGE = '@shipwright/domain';
+export * from './entities.js';
+export * from './state-machines.js';
