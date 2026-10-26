@@ -117,7 +117,7 @@ The initial runnable structure follows [issue 001: Bootstrap monorepo](https://g
 - Docker Engine/Desktop with Compose v2, or Podman with a Compose provider
 - Git
 
-From the repository root, copy `.env.example` to `.env`, then install and start the local services:
+From the repository root, copy `.env.example` to `.env`, set `PROJECT_ALLOWED_ROOTS` to one or more allowed local directories separated by semicolons, then install and start the local services:
 
 ```sh
 corepack enable

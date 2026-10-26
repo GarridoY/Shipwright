@@ -1,6 +1,6 @@
 import { createDatabase } from '@shipwright/database';
 import { buildApi } from './app.js';
-import { resolveApiHost } from './config.js';
+import { resolveApiHost, resolveProjectRoots } from './config.js';
 
 const host = resolveApiHost(process.env.API_HOST);
 const databaseUrl = process.env.DATABASE_URL;
@@ -11,7 +11,8 @@ if (!Number.isInteger(port) || port < 1 || port > 65535)
   throw new Error('API_PORT must be a valid TCP port');
 
 const database = createDatabase(databaseUrl);
-const app = await buildApi({ checkDatabase: database.checkConnection });
+const projectRoots = resolveProjectRoots(process.env.PROJECT_ALLOWED_ROOTS);
+const app = await buildApi({ checkDatabase: database.checkConnection, projects: database.projects, allowedProjectRoots: projectRoots });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {
