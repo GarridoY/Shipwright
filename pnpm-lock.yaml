@@ -96,6 +96,9 @@ importers:
 
   packages/database:
     dependencies:
+      '@shipwright/domain':
+        specifier: workspace:^
+        version: link:../domain
       drizzle-orm:
         specifier: ^0.40.0
         version: 0.40.1(@types/pg@8.23.1)(gel@2.2.1)(pg@8.23.1)
