@@ -1,2 +1,2 @@
 export { createDatabase } from './client.js';
-export { applicationMetadata } from './schema/index.js';
+export * from './schema/index.js';
