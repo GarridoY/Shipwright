@@ -110,6 +110,25 @@ describe('GET /health', () => {
     expect(duplicate.json()).toEqual({ error: 'This repository is already registered' });
   });
 
+  it('returns a sanitized server error when project persistence fails', async () => {
+    const dependencies = projectDependencies();
+    dependencies.projects.create = async () => {
+      throw new Error('sensitive database connection details');
+    };
+    const app = await buildApi(dependencies);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'Example', repositoryPath: repository },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: 'Unable to register project' });
+    expect(response.body).not.toContain('sensitive database connection details');
+  });
+
   it('returns unavailable without exposing database errors', async () => {
     const app = await buildApi({ ...projectDependencies(),
       checkDatabase: async () => {

@@ -65,8 +65,9 @@ export async function buildApi(dependencies: ApiDependencies) {
       return { error: 'A project name and repository path are required' };
     }
 
+    let canonicalPath: string;
     try {
-      const canonicalPath = await realpath(repositoryPath.trim());
+      canonicalPath = await realpath(repositoryPath.trim());
       const roots = await Promise.all(dependencies.allowedProjectRoots.map((root) => realpath(root)));
       if (!roots.some((root) => isWithin(root, canonicalPath))) {
         reply.code(400);
@@ -78,17 +79,25 @@ export async function buildApi(dependencies: ApiDependencies) {
         { timeout: 3000, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } },
       );
       if (await realpath(gitRootOutput.trim()) !== canonicalPath) throw new Error('path is not the repository root');
-      const project = await dependencies.projects.create({ name: name.trim(), repositoryPath: canonicalPath });
-      reply.code(201);
-      return { ...project, currentBranch: await readBranch(canonicalPath) };
+    } catch {
+      reply.code(400);
+      return { error: 'Repository path is invalid or inaccessible' };
+    }
+
+    let project: ProjectRecord;
+    try {
+      project = await dependencies.projects.create({ name: name.trim(), repositoryPath: canonicalPath });
     } catch (error) {
       if (isDuplicate(error)) {
         reply.code(409);
         return { error: 'This repository is already registered' };
       }
-      reply.code(400);
-      return { error: 'Repository path is invalid or inaccessible' };
+      reply.code(500);
+      return { error: 'Unable to register project' };
     }
+
+    reply.code(201);
+    return { ...project, currentBranch: await readBranch(canonicalPath) };
   });
 
   return app;
