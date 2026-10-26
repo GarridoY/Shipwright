@@ -28,7 +28,7 @@ export const projects = pgTable('projects', {
   repositoryPath: text('repository_path').notNull(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}, (table) => [uniqueIndex('projects_repository_path_uidx').on(table.repositoryPath)]);
 
 export const workItems = pgTable('work_items', {
   id: uuid('id').primaryKey().defaultRandom(),
