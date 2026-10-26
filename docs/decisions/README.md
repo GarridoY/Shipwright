@@ -12,3 +12,4 @@ Accepted decisions are numbered, immutable in intent, and revised through a supe
 | [0006](0006-typed-events-and-separate-lifecycles.md) | Model tasks, runs, and events independently |
 | [0007](0007-local-first-access-model.md) | Bind interfaces locally and defer remote access |
 | [0008](0008-recovery-and-idempotency.md) | Use leased execution with explicit recovery semantics |
+| [0009](0009-cli-first-agent-harness.md) | Start agent integrations with a process-backed CLI harness |
