@@ -8,21 +8,25 @@ import {
 } from './execution-leases.js';
 
 class LeaseAlreadyHeldError extends Error {}
+const now = new Date('2026-10-26T12:00:00.000Z');
 
 class MemoryLeaseStore implements LeaseAcquisitionStore {
   readonly leases: ExecutionLease[] = [];
+  now = new Date(now);
+  delayBeforeInsertMs = 0;
 
   async transaction<T>(operation: (transaction: LeaseAcquisitionTransaction) => Promise<T>): Promise<T> {
     const snapshot = structuredClone(this.leases);
     const transaction: LeaseAcquisitionTransaction = {
-      async releaseExpired(runId, now) {
+      releaseExpired: async (runId) => {
         for (const lease of snapshot) {
-          if (lease.runId === runId && lease.releasedAt === null && lease.expiresAt <= now) {
-            lease.releasedAt = now;
+          if (lease.runId === runId && lease.releasedAt === null && lease.expiresAt <= this.now) {
+            lease.releasedAt = this.now;
           }
         }
       },
-      async insert(input) {
+      insert: async (input) => {
+        this.now = new Date(this.now.getTime() + this.delayBeforeInsertMs);
         if (snapshot.some((lease) => lease.runId === input.runId && lease.releasedAt === null)) {
           throw new LeaseAlreadyHeldError();
         }
@@ -30,10 +34,10 @@ class MemoryLeaseStore implements LeaseAcquisitionStore {
           id: `lease-${snapshot.length + 1}`,
           runId: input.runId,
           owner: input.owner,
-          heartbeatAt: input.now,
-          expiresAt: input.expiresAt,
+          heartbeatAt: this.now,
+          expiresAt: new Date(this.now.getTime() + input.ttlMs),
           releasedAt: null,
-          createdAt: input.now,
+          createdAt: this.now,
         };
         snapshot.push(lease);
         return lease;
@@ -46,12 +50,10 @@ class MemoryLeaseStore implements LeaseAcquisitionStore {
   }
 }
 
-const now = new Date('2026-10-26T12:00:00.000Z');
 const input = (overrides: Partial<AcquireExecutionLeaseInput> = {}): AcquireExecutionLeaseInput => ({
   runId: 'run-1',
   owner: 'worker-new',
-  expiresAt: new Date(now.getTime() + 60_000),
-  now,
+  ttlMs: 60_000,
   ...overrides,
 });
 
@@ -90,5 +92,16 @@ describe('execution lease acquisition', () => {
 
     await expect(acquireExecutionLease(store, input())).rejects.toThrow(LeaseAlreadyHeldError);
     expect(store.leases).toEqual([activeLease]);
+  });
+
+  it('starts the lease TTL at insertion after a transaction delay', async () => {
+    const store = new MemoryLeaseStore();
+    store.delayBeforeInsertMs = 120_000;
+
+    const lease = await acquireExecutionLease(store, input());
+
+    expect(lease.heartbeatAt).toEqual(store.now);
+    expect(lease.expiresAt.getTime()).toBeGreaterThan(store.now.getTime());
+    expect(lease.expiresAt.getTime() - lease.heartbeatAt.getTime()).toBe(input().ttlMs);
   });
 });
