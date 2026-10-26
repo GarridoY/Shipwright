@@ -62,8 +62,8 @@ export interface TaskRecord {
   objective: string;
   acceptanceCriteria: string[];
   status: string;
-  agentDefinitionId: string;
-  runtime: string;
+  agentDefinitionId: string | null;
+  runtime: string | null;
   createdAt: Date;
   updatedAt: Date;
   runs: RunRecord[];
@@ -82,7 +82,7 @@ export interface RunRecord {
 export interface TaskStore {
   create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>): Promise<TaskRecord>;
   get(id: string): Promise<TaskRecord | null>;
-  startRun(taskId: string, runtimeCapabilities: readonly string[] | undefined): Promise<{ kind: 'created'; run: RunRecord } | { kind: 'not_found' | 'ineligible' | 'active' | 'capability_mismatch' }>;
+  startRun(taskId: string, runtimeCapabilities: readonly string[] | undefined): Promise<{ kind: 'created'; run: RunRecord } | { kind: 'not_found' | 'ineligible' | 'active' | 'capability_mismatch' | 'definition_required' }>;
 }
 
 export async function buildApi(dependencies: ApiDependencies) {
@@ -229,14 +229,18 @@ export async function buildApi(dependencies: ApiDependencies) {
         reply.code(404);
         return { error: 'Task not found' };
       }
+      if (!task.agentDefinitionId || !task.runtime) {
+        reply.code(409);
+        return { error: 'Select an agent definition before starting this legacy task; create a new task with a definition to proceed' };
+      }
       const runtime = dependencies.runtimes.get(task.runtime);
       const result = await dependencies.tasks.startRun(request.params.id, runtime?.capabilities);
       if (result.kind === 'created') {
         reply.code(202);
         return result.run;
       }
-      const codes = { not_found: 404, ineligible: 409, active: 409, capability_mismatch: 422 } as const;
-      const messages = { not_found: 'Task not found', ineligible: 'Task is not eligible to run', active: 'Task already has an active run', capability_mismatch: 'Runtime does not meet agent definition requirements' } as const;
+      const codes = { not_found: 404, ineligible: 409, active: 409, capability_mismatch: 422, definition_required: 409 } as const;
+      const messages = { not_found: 'Task not found', ineligible: 'Task is not eligible to run', active: 'Task already has an active run', capability_mismatch: 'Runtime does not meet agent definition requirements', definition_required: 'Select an agent definition before starting this legacy task; create a new task with a definition to proceed' } as const;
       reply.code(codes[result.kind]);
       return { error: messages[result.kind] };
     } catch {

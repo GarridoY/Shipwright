@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 
 type Run = { id: string; attempt: number; status: string; runtime: string; agentDefinitionId: string; createdAt: string };
-type Task = { id: string; title: string; objective: string; acceptanceCriteria: string[]; status: string; runtime: string; agentDefinitionId: string; runs: Run[] };
+type Task = { id: string; title: string; objective: string; acceptanceCriteria: string[]; status: string; runtime: string | null; agentDefinitionId: string | null; runs: Run[] };
 
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
@@ -53,8 +53,10 @@ export default function TaskDetail() {
       <p>Status: {task.status}</p>
       <h3>Acceptance criteria</h3>
       <ul>{task.acceptanceCriteria.map((criterion, index) => <li key={index}>{criterion}</li>)}</ul>
-      <p>Definition: {task.agentDefinitionId}; runtime: {task.runtime}</p>
-      <button type="button" onClick={startRun} disabled={starting}>{starting ? 'Starting…' : 'Start run'}</button>
+      {task.agentDefinitionId && task.runtime
+        ? <p>Definition: {task.agentDefinitionId}; runtime: {task.runtime}</p>
+        : <p>This legacy task has no agent definition. Create a new task with a definition before starting a run.</p>}
+      <button type="button" onClick={startRun} disabled={starting || !task.agentDefinitionId || !task.runtime}>{starting ? 'Starting…' : 'Start run'}</button>
       <h3>Run attempts</h3>
       {task.runs.length === 0 ? <p>No run attempts yet.</p> : <ol>{task.runs.map((run) => <li key={run.id}>
         Attempt {run.attempt}: {run.status} — {run.runtime} ({run.id})

@@ -73,6 +73,7 @@ function projectDependencies() {
       async startRun(id: string, capabilities: readonly string[] | undefined) {
         const task = taskRecords.get(id);
         if (!task) return { kind: 'not_found' as const };
+        if (!task.agentDefinitionId || !task.runtime) return { kind: 'definition_required' as const };
         if (!capabilities) return { kind: 'capability_mismatch' as const };
         if (task.runs.some((run) => ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'].includes(run.status))) return { kind: 'active' as const };
         const run = { id: randomUUID(), taskId: id, attempt: task.runs.length + 1, status: 'queued', agentDefinitionId: task.agentDefinitionId, runtime: task.runtime, createdAt: new Date() };
@@ -232,5 +233,21 @@ describe('GET /health', () => {
     const launch = await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/runs` });
     expect(launch.statusCode).toBe(422);
     expect((await app.inject({ method: 'GET', url: `/api/tasks/${taskId}` })).json().runs).toHaveLength(0);
+  });
+
+  it('preserves legacy tasks without a definition and gives a clear launch response', async () => {
+    const dependencies = projectDependencies();
+    const legacyTask: TaskRecord = {
+      id: randomUUID(), projectId: randomUUID(), workItemId: null, title: 'Legacy task', objective: 'Existing objective',
+      acceptanceCriteria: ['Existing criterion'], status: 'ready', agentDefinitionId: null, runtime: null,
+      createdAt: new Date(), updatedAt: new Date(), runs: [],
+    };
+    dependencies.tasks.get = async (id: string) => id === legacyTask.id ? legacyTask : null;
+    const app = await buildApi(dependencies);
+    apps.push(app);
+    const launch = await app.inject({ method: 'POST', url: `/api/tasks/${legacyTask.id}/runs` });
+    expect(launch.statusCode).toBe(409);
+    expect(launch.json().error).toContain('Select an agent definition');
+    expect(legacyTask.runs).toHaveLength(0);
   });
 });

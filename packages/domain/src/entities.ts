@@ -26,8 +26,8 @@ export interface Task {
   title: string;
   objective: string;
   acceptanceCriteria: string[];
-  agentDefinitionId: EntityId;
-  runtime: string;
+  agentDefinitionId: EntityId | null;
+  runtime: string | null;
   status: TaskStatus;
   version: number;
   createdAt: Date;

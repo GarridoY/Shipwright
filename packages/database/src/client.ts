@@ -46,6 +46,7 @@ export function createDatabase(databaseUrl: string) {
         const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
         if (!task) return { kind: 'not_found' as const };
         if (task.status !== 'ready') return { kind: 'ineligible' as const };
+        if (!task.agentDefinitionId || !task.runtime) return { kind: 'definition_required' as const };
         const prior = await db.select().from(agentRuns).where(eq(agentRuns.taskId, taskId));
         if (prior.some((run) => ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'].includes(run.status))) return { kind: 'active' as const };
         const [definition] = await db.select().from(agentDefinitions).where(eq(agentDefinitions.id, task.agentDefinitionId));
