@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApi, type TaskRecord } from './app.js';
-import { resolveApiHost } from './config.js';
+import { resolveApiHost, resolveProjectRoots } from './config.js';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,6 +37,16 @@ describe('resolveApiHost', () => {
       expect(() => resolveApiHost(input)).toThrow(/API_HOST must be a loopback address/);
     },
   );
+});
+
+describe('resolveProjectRoots', () => {
+  it.each([undefined, '', '  ', ' ; ;  '])('resolves empty configuration %s to an empty allowlist', (input) => {
+    expect(resolveProjectRoots(input)).toEqual([]);
+  });
+
+  it('retains semicolon-separated root parsing', () => {
+    expect(resolveProjectRoots(' C:\\projects ; ; D:\\work ')).toEqual(['C:\\projects', 'D:\\work']);
+  });
 });
 
 afterEach(async () => {
@@ -126,6 +136,24 @@ describe('GET /health', () => {
     const listed = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toHaveLength(1);
+  });
+
+  it('starts with an empty project allowlist and denies repository registration', async () => {
+    const dependencies = projectDependencies();
+    dependencies.allowedProjectRoots = [];
+    const app = await buildApi(dependencies);
+    apps.push(app);
+
+    const health = await app.inject({ method: 'GET', url: '/health' });
+    expect(health.statusCode).toBe(200);
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'Blocked', repositoryPath: repository },
+    });
+    expect(denied.statusCode).toBe(400);
+    expect(denied.json()).toEqual({ error: 'Repository path is outside configured project roots' });
+    expect(records.size).toBe(0);
   });
 
   it('rejects invalid and out-of-root paths without echoing the path', async () => {

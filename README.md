@@ -117,7 +117,7 @@ The initial runnable structure follows [issue 001: Bootstrap monorepo](https://g
 - Docker Engine/Desktop with Compose v2, or Podman with a Compose provider
 - Git
 
-From the repository root, copy `.env.example` to `.env`, set `PROJECT_ALLOWED_ROOTS` to one or more allowed local directories separated by semicolons, then install and start the local services:
+From the repository root, copy `.env.example` to `.env`, then install and start the local services:
 
 ```sh
 corepack enable
@@ -128,6 +128,8 @@ pnpm dev
 ```
 
 The web app is available at <http://localhost:3000>, and the API health endpoint at <http://127.0.0.1:4000/health>. The worker runs alongside them and exits cleanly on Ctrl+C. The health endpoint checks PostgreSQL connectivity. Use `pnpm db:down` to stop the database. With Podman, use `pnpm db:up:podman` and `pnpm db:down:podman` instead.
+
+`PROJECT_ALLOWED_ROOTS` is optional. When unset or blank, the API starts with an empty project allowlist and project registration is denied. Before registering a project, configure one or more permitted local directories in `.env`, separated by semicolons (for example, `PROJECT_ALLOWED_ROOTS=C:/Users/you/source;D:/work`). No directory is allowed implicitly.
 
 Run the repository checks with `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test`. `pnpm db:migrate` applies checked-in Drizzle SQL migrations to a blank database as well as an existing one. `.env` contains development-only local credentials; do not use them outside local development.
 
