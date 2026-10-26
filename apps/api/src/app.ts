@@ -26,6 +26,32 @@ export interface ApiDependencies {
   projects: ProjectStore;
   allowedProjectRoots: string[];
   tasks: TaskStore;
+  agentDefinitions: AgentDefinitionStore;
+  runtimes: RuntimeCatalog;
+}
+
+export interface AgentDefinitionRecord {
+  id: string;
+  name: string;
+  version: number;
+  runtime: string;
+  configuration: Record<string, unknown>;
+  createdAt: Date;
+}
+
+export interface AgentDefinitionStore {
+  list(): Promise<AgentDefinitionRecord[]>;
+  create(input: { name: string; runtime: string; configuration: Record<string, unknown> }): Promise<AgentDefinitionRecord>;
+}
+
+export interface RuntimeDescriptor {
+  id: string;
+  capabilities: readonly string[];
+}
+
+export interface RuntimeCatalog {
+  list(): RuntimeDescriptor[];
+  get(id: string): RuntimeDescriptor | undefined;
 }
 
 export interface TaskRecord {
@@ -56,7 +82,7 @@ export interface RunRecord {
 export interface TaskStore {
   create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>): Promise<TaskRecord>;
   get(id: string): Promise<TaskRecord | null>;
-  startRun(taskId: string): Promise<{ kind: 'created'; run: RunRecord } | { kind: 'not_found' | 'ineligible' | 'active' | 'capability_mismatch' }>;
+  startRun(taskId: string, runtimeCapabilities: readonly string[] | undefined): Promise<{ kind: 'created'; run: RunRecord } | { kind: 'not_found' | 'ineligible' | 'active' | 'capability_mismatch' }>;
 }
 
 export async function buildApi(dependencies: ApiDependencies) {
@@ -132,7 +158,35 @@ export async function buildApi(dependencies: ApiDependencies) {
     return { ...project, currentBranch: await readBranch(canonicalPath) };
   });
 
-  app.post<{ Body: { projectId: string; workItemId?: string | null; title: string; objective: string; acceptanceCriteria: string[]; agentDefinitionId: string; runtime: string } }>('/api/tasks', async (request, reply) => {
+  app.get('/api/runtimes', async () => dependencies.runtimes.list());
+
+  app.get('/api/agent-definitions', async (_request, reply) => {
+    try {
+      return await dependencies.agentDefinitions.list();
+    } catch {
+      reply.code(500);
+      return { error: 'Unable to list agent definitions' };
+    }
+  });
+
+  app.post<{ Body: { name: string; runtime: string } }>('/api/agent-definitions', async (request, reply) => {
+    const { name, runtime } = request.body ?? {};
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 200 ||
+        typeof runtime !== 'string' || !dependencies.runtimes.get(runtime)) {
+      reply.code(400);
+      return { error: 'A definition name and available runtime are required' };
+    }
+    try {
+      const definition = await dependencies.agentDefinitions.create({ name: name.trim(), runtime, configuration: { requiredCapabilities: [] } });
+      reply.code(201);
+      return definition;
+    } catch {
+      reply.code(500);
+      return { error: 'Unable to create agent definition' };
+    }
+  });
+
+  app.post<{ Body: { projectId: string; workItemId?: string | null; title: string; objective: string; acceptanceCriteria: string[]; agentDefinitionId: string } }>('/api/tasks', async (request, reply) => {
     const body = request.body;
     if (!body || typeof body.projectId !== 'string' || !body.projectId ||
         typeof body.title !== 'string' || !body.title.trim() || body.title.trim().length > 200 ||
@@ -140,13 +194,17 @@ export async function buildApi(dependencies: ApiDependencies) {
         !Array.isArray(body.acceptanceCriteria) || body.acceptanceCriteria.length > 100 ||
         !body.acceptanceCriteria.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 2000) ||
         typeof body.agentDefinitionId !== 'string' || !body.agentDefinitionId ||
-        typeof body.runtime !== 'string' || !body.runtime.trim() || body.runtime.length > 100 ||
         (body.workItemId !== undefined && body.workItemId !== null && typeof body.workItemId !== 'string')) {
       reply.code(400);
       return { error: 'Invalid task input' };
     }
     try {
-      const task = await dependencies.tasks.create({ ...body, title: body.title.trim(), objective: body.objective.trim(), acceptanceCriteria: body.acceptanceCriteria.map((item) => item.trim()), workItemId: body.workItemId ?? null });
+      const definition = (await dependencies.agentDefinitions.list()).find((item) => item.id === body.agentDefinitionId);
+      if (!definition) {
+        reply.code(400);
+        return { error: 'Agent definition does not exist' };
+      }
+      const task = await dependencies.tasks.create({ ...body, runtime: definition.runtime, title: body.title.trim(), objective: body.objective.trim(), acceptanceCriteria: body.acceptanceCriteria.map((item) => item.trim()), workItemId: body.workItemId ?? null });
       reply.code(201);
       return task;
     } catch {
@@ -166,7 +224,13 @@ export async function buildApi(dependencies: ApiDependencies) {
 
   app.post<{ Params: { id: string } }>('/api/tasks/:id/runs', async (request, reply) => {
     try {
-      const result = await dependencies.tasks.startRun(request.params.id);
+      const task = await dependencies.tasks.get(request.params.id);
+      if (!task) {
+        reply.code(404);
+        return { error: 'Task not found' };
+      }
+      const runtime = dependencies.runtimes.get(task.runtime);
+      const result = await dependencies.tasks.startRun(request.params.id, runtime?.capabilities);
       if (result.kind === 'created') {
         reply.code(202);
         return result.run;

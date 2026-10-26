@@ -1,6 +1,7 @@
 import { createDatabase } from '@shipwright/database';
 import { buildApi } from './app.js';
 import { resolveApiHost, resolveProjectRoots } from './config.js';
+import { runtimeCatalog } from './runtimes.js';
 
 const host = resolveApiHost(process.env.API_HOST);
 const databaseUrl = process.env.DATABASE_URL;
@@ -12,7 +13,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535)
 
 const database = createDatabase(databaseUrl);
 const projectRoots = resolveProjectRoots(process.env.PROJECT_ALLOWED_ROOTS);
-const app = await buildApi({ checkDatabase: database.checkConnection, projects: database.projects, tasks: database.tasks, allowedProjectRoots: projectRoots });
+const app = await buildApi({ checkDatabase: database.checkConnection, projects: database.projects, tasks: database.tasks, agentDefinitions: database.agentDefinitions, runtimes: runtimeCatalog, allowedProjectRoots: projectRoots });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {

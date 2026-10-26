@@ -46,6 +46,7 @@ afterEach(async () => {
 
 function projectDependencies() {
   const taskRecords = new Map<string, TaskRecord>();
+  const definitionId = randomUUID();
   return {
     checkDatabase: async () => undefined,
     allowedProjectRoots: [root],
@@ -69,14 +70,27 @@ function projectDependencies() {
         return task;
       },
       async get(id: string) { return taskRecords.get(id) ?? null; },
-      async startRun(id: string) {
+      async startRun(id: string, capabilities: readonly string[] | undefined) {
         const task = taskRecords.get(id);
         if (!task) return { kind: 'not_found' as const };
+        if (!capabilities) return { kind: 'capability_mismatch' as const };
+        if (task.runs.some((run) => ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'].includes(run.status))) return { kind: 'active' as const };
         const run = { id: randomUUID(), taskId: id, attempt: task.runs.length + 1, status: 'queued', agentDefinitionId: task.agentDefinitionId, runtime: task.runtime, createdAt: new Date() };
         task.runs.push(run);
         return { kind: 'created' as const, run };
       },
     },
+    agentDefinitions: {
+      async list() { return [{ id: definitionId, name: 'Test definition', version: 1, runtime: 'fake', configuration: { requiredCapabilities: [] }, createdAt: new Date() }]; },
+      async create(input: { name: string; runtime: string; configuration: Record<string, unknown> }) {
+        return { ...input, id: randomUUID(), version: 1, createdAt: new Date() };
+      },
+    },
+    runtimes: {
+      list() { return [{ id: 'fake', capabilities: [] }]; },
+      get(id: string) { return id === 'fake' ? { id: 'fake', capabilities: [] } : undefined; },
+    },
+    definitionId,
   };
 }
 
@@ -166,10 +180,11 @@ describe('GET /health', () => {
   });
 
   it('creates, reads, and explicitly starts separate task attempts', async () => {
-    const app = await buildApi(projectDependencies());
+    const dependencies = projectDependencies();
+    const app = await buildApi(dependencies);
     apps.push(app);
     const created = await app.inject({ method: 'POST', url: '/api/tasks', payload: {
-      projectId: randomUUID(), title: 'Implement feature', objective: 'Add the feature', acceptanceCriteria: ['It works'], agentDefinitionId: randomUUID(), runtime: 'fake',
+      projectId: randomUUID(), title: 'Implement feature', objective: 'Add the feature', acceptanceCriteria: ['It works'], agentDefinitionId: dependencies.definitionId,
     } });
     expect(created.statusCode).toBe(201);
     const task = created.json();
@@ -181,16 +196,41 @@ describe('GET /health', () => {
     const detail = await app.inject({ method: 'GET', url: `/api/tasks/${task.id}` });
     expect(detail.statusCode).toBe(200);
     expect(detail.json().runs).toHaveLength(1);
+    const duplicate = await app.inject({ method: 'POST', url: `/api/tasks/${task.id}/runs` });
+    expect(duplicate.statusCode).toBe(409);
   });
 
   it('rejects invalid task criteria and returns 404 for missing task detail', async () => {
     const app = await buildApi(projectDependencies());
     apps.push(app);
     const invalid = await app.inject({ method: 'POST', url: '/api/tasks', payload: {
-      projectId: randomUUID(), title: 'Invalid', objective: 'Objective', acceptanceCriteria: [''], agentDefinitionId: randomUUID(), runtime: 'fake',
+      projectId: randomUUID(), title: 'Invalid', objective: 'Objective', acceptanceCriteria: [''], agentDefinitionId: randomUUID(),
     } });
     expect(invalid.statusCode).toBe(400);
     const missing = await app.inject({ method: 'GET', url: `/api/tasks/${randomUUID()}` });
     expect(missing.statusCode).toBe(404);
+  });
+
+  it('allows users to create and list definitions for available runtimes', async () => {
+    const app = await buildApi(projectDependencies());
+    apps.push(app);
+    expect((await app.inject({ method: 'GET', url: '/api/runtimes' })).json()).toEqual([{ id: 'fake', capabilities: [] }]);
+    const created = await app.inject({ method: 'POST', url: '/api/agent-definitions', payload: { name: 'Browser definition', runtime: 'fake' } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().runtime).toBe('fake');
+    expect((await app.inject({ method: 'GET', url: '/api/agent-definitions' })).statusCode).toBe(200);
+  });
+
+  it('rejects run launch when the selected runtime adapter has no capability declaration', async () => {
+    const dependencies = projectDependencies();
+    const app = await buildApi({ ...dependencies, runtimes: { ...dependencies.runtimes, get: () => undefined } });
+    apps.push(app);
+    const created = await app.inject({ method: 'POST', url: '/api/tasks', payload: {
+      projectId: randomUUID(), title: 'Fail closed', objective: 'Do not launch without adapter capabilities', acceptanceCriteria: ['No run created'], agentDefinitionId: dependencies.definitionId,
+    } });
+    const taskId = created.json().id as string;
+    const launch = await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/runs` });
+    expect(launch.statusCode).toBe(422);
+    expect((await app.inject({ method: 'GET', url: `/api/tasks/${taskId}` })).json().runs).toHaveLength(0);
   });
 });
