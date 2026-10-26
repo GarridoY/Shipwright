@@ -81,6 +81,7 @@ export interface RunRecord {
 
 export interface TaskStore {
   create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>): Promise<TaskRecord>;
+  workItemBelongsToProject(workItemId: string, projectId: string): Promise<boolean>;
   get(id: string): Promise<TaskRecord | null>;
   startRun(taskId: string, runtimeCapabilities: readonly string[] | undefined): Promise<{ kind: 'created'; run: RunRecord } | { kind: 'not_found' | 'ineligible' | 'active' | 'capability_mismatch' | 'definition_required' }>;
 }
@@ -199,6 +200,10 @@ export async function buildApi(dependencies: ApiDependencies) {
       return { error: 'Invalid task input' };
     }
     try {
+      if (body.workItemId && !(await dependencies.tasks.workItemBelongsToProject(body.workItemId, body.projectId))) {
+        reply.code(400);
+        return { error: 'Work item does not belong to the specified project' };
+      }
       const definition = (await dependencies.agentDefinitions.list()).find((item) => item.id === body.agentDefinitionId);
       if (!definition) {
         reply.code(400);

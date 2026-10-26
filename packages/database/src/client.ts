@@ -1,12 +1,16 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { agentDefinitions, agentRuns, projects, tasks } from './schema/index.js';
-import { desc, eq } from 'drizzle-orm';
+import { agentDefinitions, agentRuns, projects, tasks, workItems } from './schema/index.js';
+import { and, desc, eq } from 'drizzle-orm';
 import { supportsCapabilities } from '@shipwright/domain';
 
 export function createDatabase(databaseUrl: string) {
   const pool = new Pool({ connectionString: databaseUrl });
   const db = drizzle(pool);
+  const workItemBelongsToProject = async (workItemId: string, projectId: string) => {
+    const [workItem] = await db.select({ id: workItems.id }).from(workItems).where(and(eq(workItems.id, workItemId), eq(workItems.projectId, projectId)));
+    return Boolean(workItem);
+  };
 
   return {
     db,
@@ -32,9 +36,15 @@ export function createDatabase(databaseUrl: string) {
     },
     tasks: {
       async create(input: { projectId: string; workItemId: string | null; title: string; objective: string; acceptanceCriteria: string[]; agentDefinitionId: string; runtime: string }) {
+        if (input.workItemId && !(await workItemBelongsToProject(input.workItemId, input.projectId))) {
+          throw new Error('Work item does not belong to the specified project');
+        }
         const [task] = await db.insert(tasks).values({ ...input, status: 'ready' }).returning();
         if (!task) throw new Error('Task insert returned no record');
         return { ...task, runs: [] };
+      },
+      async workItemBelongsToProject(workItemId: string, projectId: string) {
+        return workItemBelongsToProject(workItemId, projectId);
       },
       async get(id: string) {
         const [task] = await db.select().from(tasks).where(eq(tasks.id, id));

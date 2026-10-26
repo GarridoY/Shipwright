@@ -46,6 +46,7 @@ afterEach(async () => {
 
 function projectDependencies() {
   const taskRecords = new Map<string, TaskRecord>();
+  const workItemOwners = new Map<string, string>();
   const definitionId = randomUUID();
   return {
     checkDatabase: async () => undefined,
@@ -68,6 +69,9 @@ function projectDependencies() {
         const task = { ...input, id: randomUUID(), status: 'ready', createdAt: now, updatedAt: now, runs: [] };
         taskRecords.set(task.id, task);
         return task;
+      },
+      async workItemBelongsToProject(workItemId: string, projectId: string) {
+        return workItemOwners.get(workItemId) === projectId;
       },
       async get(id: string) { return taskRecords.get(id) ?? null; },
       async startRun(id: string, capabilities: readonly string[] | undefined) {
@@ -92,6 +96,8 @@ function projectDependencies() {
       get(id: string) { return id === 'fake' ? { id: 'fake', capabilities: [] } : undefined; },
     },
     definitionId,
+    workItemOwners,
+    taskCount: () => taskRecords.size,
   };
 }
 
@@ -249,5 +255,21 @@ describe('GET /health', () => {
     expect(launch.statusCode).toBe(409);
     expect(launch.json().error).toContain('Select an agent definition');
     expect(legacyTask.runs).toHaveLength(0);
+  });
+
+  it('accepts same-project work items and rejects cross-project associations', async () => {
+    const dependencies = projectDependencies();
+    const projectId = randomUUID();
+    const otherProjectId = randomUUID();
+    const workItemId = randomUUID();
+    dependencies.workItemOwners.set(workItemId, projectId);
+    const app = await buildApi(dependencies);
+    apps.push(app);
+    const base = { title: 'Scoped task', objective: 'Keep associations consistent', acceptanceCriteria: ['Project matches'], agentDefinitionId: dependencies.definitionId, workItemId };
+    const sameProject = await app.inject({ method: 'POST', url: '/api/tasks', payload: { ...base, projectId } });
+    expect(sameProject.statusCode).toBe(201);
+    const otherProject = await app.inject({ method: 'POST', url: '/api/tasks', payload: { ...base, projectId: otherProjectId } });
+    expect(otherProject.statusCode).toBe(400);
+    expect(dependencies.taskCount()).toBe(1);
   });
 });
