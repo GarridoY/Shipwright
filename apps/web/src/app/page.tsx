@@ -8,12 +8,13 @@ type HealthState =
 type Project = { id: string; name: string; repositoryPath: string; currentBranch: string | null };
 type AgentDefinition = { id: string; name: string; version: number; runtime: string };
 type Runtime = { id: string; capabilities: string[] };
-type DashboardTask = { id: string; title: string; projectId: string; status: string; runtime: string | null; agentDefinitionId: string | null; updatedAt: string; runs: { id: string; attempt: number; status: string; runtime: string }[] };
+type DashboardTask = { id: string; title: string; projectId: string; status: string; runtime: string | null; agentDefinitionId: string | null; updatedAt: string; latestRunStatus: string | null };
+type DashboardSnapshot = { tasks: DashboardTask[]; taskLimit: number; totalTasks: number; activeRuns: number; needsAttention: number };
 
 function taskState(task: DashboardTask) {
-  const latestRun = task.runs[0];
-  const activeRun = task.runs.find((run) => ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'].includes(run.status));
-  const state = activeRun?.status ?? (latestRun?.status === 'failed' ? 'failed' : task.status);
+  const activeRunStatuses = ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'];
+  const latestRun = task.latestRunStatus;
+  const state = latestRun && activeRunStatuses.includes(latestRun) ? latestRun : latestRun === 'failed' ? 'failed' : task.status;
   if (state === 'waiting_approval') return { label: 'Needs approval', tone: 'attention' };
   if (state === 'waiting_input') return { label: 'Needs your input', tone: 'attention' };
   if (state === 'running' || state === 'starting' || state === 'in_progress') return { label: 'Agent working', tone: 'running' };
@@ -28,7 +29,7 @@ function taskState(task: DashboardTask) {
 export default function Home() {
   const [health, setHealth] = useState<HealthState>({ kind: 'loading' });
   const [projects, setProjects] = useState<Project[]>([]);
-  const [tasks, setTasks] = useState<DashboardTask[]>([]);
+  const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [tasksLoaded, setTasksLoaded] = useState(false);
   const [definitions, setDefinitions] = useState<AgentDefinition[]>([]);
   const [runtimes, setRuntimes] = useState<Runtime[]>([]);
@@ -51,10 +52,10 @@ export default function Home() {
         setProjects(await response.json() as Project[]);
       })
       .catch(() => setProjectError('Unable to load projects.'));
-    fetch(`${apiUrl}/api/tasks`)
+    fetch(`${apiUrl}/api/dashboard`)
       .then(async (response) => {
         if (!response.ok) throw new Error('Task request failed');
-        setTasks(await response.json() as DashboardTask[]);
+        setDashboard(await response.json() as DashboardSnapshot);
       })
       .catch(() => setTaskLoadError('Unable to load task activity.'))
       .finally(() => setTasksLoaded(true));
@@ -145,8 +146,7 @@ export default function Home() {
   }
 
   const serviceStatus = health.kind === 'ready' ? 'ready' : health.kind === 'failed' ? 'error' : 'loading';
-  const needsAttention = tasks.filter((task) => taskState(task).tone === 'attention' || taskState(task).tone === 'blocked').length;
-  const activeRuns = tasks.filter((task) => task.runs.some((run) => ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'].includes(run.status))).length;
+  const tasks = dashboard?.tasks ?? [];
 
   return <div className="app-shell">
     <aside className="app-sidebar">
@@ -172,14 +172,14 @@ export default function Home() {
         <div className="page-heading"><div><span className="eyebrow">YOUR LOCAL SOFTWARE FACTORY</span><h1>Welcome to Shipwright</h1><p>Create focused tasks, assign an agent, and keep every run under your control.</p></div><a className="primary-button" href="#new-project"><span aria-hidden="true">＋</span> Add project</a></div>
         {projectError && <p className="notice" role="alert">{projectError}</p>}
         <section className="overview-grid" aria-label="Workspace summary">
-          <div className="overview-card"><span className="overview-card-label">Active runs <span className="summary-mark summary-mark--running">●</span></span><strong>{taskLoadError ? '—' : activeRuns.toString().padStart(2, '0')}</strong><small>{taskLoadError ? 'Task activity unavailable' : activeRuns === 0 ? 'No agents are running right now' : 'Agents currently working'}</small></div>
-          <div className={`overview-card ${needsAttention > 0 ? 'overview-card--attention' : ''}`}><span className="overview-card-label">Needs your attention <span className="summary-mark summary-mark--attention">●</span></span><strong>{taskLoadError ? '—' : needsAttention.toString().padStart(2, '0')}</strong><small>{taskLoadError ? 'Task activity unavailable' : needsAttention === 0 ? 'Nothing waiting on you' : `${needsAttention} item${needsAttention === 1 ? '' : 's'} need a decision`}</small></div>
+          <div className="overview-card"><span className="overview-card-label">Active runs <span className="summary-mark summary-mark--running">●</span></span><strong>{taskLoadError ? '—' : (dashboard?.activeRuns ?? 0).toString().padStart(2, '0')}</strong><small>{taskLoadError ? 'Task activity unavailable' : !dashboard?.activeRuns ? 'No agents are running right now' : 'Agents currently working'}</small></div>
+          <div className={`overview-card ${(dashboard?.needsAttention ?? 0) > 0 ? 'overview-card--attention' : ''}`}><span className="overview-card-label">Needs your attention <span className="summary-mark summary-mark--attention">●</span></span><strong>{taskLoadError ? '—' : (dashboard?.needsAttention ?? 0).toString().padStart(2, '0')}</strong><small>{taskLoadError ? 'Task activity unavailable' : !dashboard?.needsAttention ? 'Nothing waiting on you' : `${dashboard.needsAttention} item${dashboard.needsAttention === 1 ? '' : 's'} need a decision`}</small></div>
           <div className="overview-card"><span className="overview-card-label">Projects <span>↗</span></span><strong>{projects.length.toString().padStart(2, '0')}</strong><small>{projects.length === 1 ? 'One workspace ready' : `${definitions.length} agent definitions configured`}</small></div>
         </section>
 
-        <div className="section-heading"><div><h2>Recent tasks</h2><p>Agent activity and decisions that need your attention.</p></div></div>
+        <div className="section-heading"><div><h2>Recent tasks</h2><p>{dashboard && dashboard.totalTasks > dashboard.taskLimit ? `Showing the ${dashboard.taskLimit} most recent of ${dashboard.totalTasks} tasks.` : 'Agent activity and decisions that need your attention.'}</p></div></div>
         <section className="panel dashboard-tasks" aria-label="Recent tasks">
-          {taskLoadError ? <div className="empty-state" role="alert"><strong>Task activity unavailable</strong>{taskLoadError}</div> : !tasksLoaded ? <div className="empty-state">Loading your task activity…</div> : tasks.length === 0 ? <div className="empty-state"><strong>No tasks yet</strong>Create a task from one of your projects below. When agents are running or waiting on you, you’ll see it here.</div> : tasks.slice(0, 8).map((task) => {
+          {taskLoadError ? <div className="empty-state" role="alert"><strong>Task activity unavailable</strong>{taskLoadError}</div> : !tasksLoaded ? <div className="empty-state">Loading your task activity…</div> : tasks.length === 0 ? <div className="empty-state"><strong>No tasks yet</strong>Create a task from one of your projects below. When agents are running or waiting on you, you’ll see it here.</div> : tasks.map((task) => {
             const state = taskState(task);
             const project = projects.find((item) => item.id === task.projectId);
             const definition = definitions.find((item) => item.id === task.agentDefinitionId);

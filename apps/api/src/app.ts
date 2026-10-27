@@ -79,13 +79,34 @@ export interface RunRecord {
   createdAt: Date;
 }
 
+export interface DashboardTaskRecord {
+  id: string;
+  projectId: string;
+  title: string;
+  status: string;
+  agentDefinitionId: string | null;
+  runtime: string | null;
+  updatedAt: Date;
+  latestRunStatus: string | null;
+}
+
+export interface DashboardSnapshot {
+  tasks: DashboardTaskRecord[];
+  taskLimit: number;
+  totalTasks: number;
+  activeRuns: number;
+  needsAttention: number;
+}
+
 export interface TaskStore {
-  list(): Promise<TaskRecord[]>;
+  dashboard(limit: number): Promise<DashboardSnapshot>;
   create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>): Promise<TaskRecord>;
   workItemBelongsToProject(workItemId: string, projectId: string): Promise<boolean>;
   get(id: string): Promise<TaskRecord | null>;
   startRun(taskId: string, runtimeCapabilities: readonly string[] | undefined): Promise<{ kind: 'created'; run: RunRecord } | { kind: 'not_found' | 'ineligible' | 'active' | 'capability_mismatch' | 'definition_required' }>;
 }
+
+export const DASHBOARD_TASK_LIMIT = 8;
 
 export async function buildApi(dependencies: ApiDependencies) {
   const app = Fastify({ logger: true });
@@ -219,12 +240,12 @@ export async function buildApi(dependencies: ApiDependencies) {
     }
   });
 
-  app.get('/api/tasks', async (_request, reply) => {
+  app.get('/api/dashboard', async (_request, reply) => {
     try {
-      return await dependencies.tasks.list();
+      return await dependencies.tasks.dashboard(DASHBOARD_TASK_LIMIT);
     } catch {
       reply.code(500);
-      return { error: 'Unable to load tasks' };
+      return { error: 'Unable to load dashboard' };
     }
   });
 
