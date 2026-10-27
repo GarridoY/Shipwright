@@ -37,22 +37,26 @@ describe('FakeRuntime scenarios', () => {
   });
 
   it('supports cancellation via interruption and abort signals', async () => {
-    const runtime = new FakeRuntime({ steps: [{ type: 'message', text: 'later', delayMs: 1_000 }] });
+    const runtime = new FakeRuntime({ steps: [{ type: 'message', text: 'later', delayMs: 60_000 }] });
     const session = await runtime.launch({ runId: 'run', workspacePath: '/w', instructions: 'work' });
     const controller = new AbortController();
-    const pending = (async () => {
-      const events = [];
-      for await (const event of runtime.streamEvents(session.sessionId, controller.signal)) events.push(event);
-      return events;
-    })();
-    setTimeout(() => controller.abort(), 0);
-    await expect(pending).resolves.toMatchObject([{ type: 'interrupted' }]);
+    const stream = runtime.streamEvents(session.sessionId, controller.signal)[Symbol.asyncIterator]();
+    const pending = stream.next();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await runtime.interrupt(session.sessionId);
+    await expect(pending).resolves.toMatchObject({ done: false, value: { type: 'interrupted' } });
 
     const second = await runtime.launch({ runId: 'run2', workspacePath: '/w', instructions: 'work' });
-    await runtime.interrupt(second.sessionId);
-    const events = [];
-    for await (const event of runtime.streamEvents(second.sessionId)) events.push(event);
-    expect(events).toMatchObject([{ type: 'interrupted' }]);
+    const secondStream = runtime.streamEvents(second.sessionId)[Symbol.asyncIterator]();
+    const pendingTermination = secondStream.next();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await runtime.terminate(second.sessionId);
+    await expect(pendingTermination).resolves.toMatchObject({ done: false, value: { type: 'interrupted' } });
+
+    const third = await runtime.launch({ runId: 'run3', workspacePath: '/w', instructions: 'work' });
+    const thirdStream = runtime.streamEvents(third.sessionId, controller.signal)[Symbol.asyncIterator]();
+    controller.abort();
+    await expect(thirdStream.next()).resolves.toMatchObject({ done: false, value: { type: 'interrupted' } });
   });
 
   it('fails unsupported operations explicitly', async () => {

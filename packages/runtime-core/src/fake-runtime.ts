@@ -34,6 +34,7 @@ interface SessionState {
   messages: string[];
   terminated: boolean;
   interrupted: boolean;
+  stopController: AbortController;
   sequence: number;
   streamStarted: boolean;
 }
@@ -83,6 +84,7 @@ export class FakeRuntime implements RuntimeAdapter {
       messages: [],
       terminated: false,
       interrupted: false,
+      stopController: new AbortController(),
       sequence: 0,
       streamStarted: false,
     });
@@ -122,15 +124,7 @@ export class FakeRuntime implements RuntimeAdapter {
         yield this.event(state, { type: 'failed', code: 'unsupported_capability', message: `Scenario requires unsupported ${step.type} capability` });
         return;
       }
-      try {
-        await delay(step.delayMs ?? 0, signal ?? state.input.signal);
-      } catch (error) {
-        if (isAbortError(error)) {
-          yield this.event(state, { type: 'interrupted' });
-          return;
-        }
-        throw error;
-      }
+      await delay(step.delayMs ?? 0, [signal, state.input.signal, state.stopController.signal]);
       if (state.terminated || state.interrupted || signal?.aborted || state.input.signal?.aborted) {
         yield this.event(state, { type: 'interrupted' });
         return;
@@ -154,11 +148,15 @@ export class FakeRuntime implements RuntimeAdapter {
 
   async interrupt(sessionId: string): Promise<void> {
     requireRuntimeCapability(this.capabilities, 'interrupt', 'interruption');
-    this.getSession(sessionId).interrupted = true;
+    const state = this.getSession(sessionId);
+    state.interrupted = true;
+    state.stopController.abort();
   }
 
   async terminate(sessionId: string): Promise<void> {
-    this.getSession(sessionId).terminated = true;
+    const state = this.getSession(sessionId);
+    state.terminated = true;
+    state.stopController.abort();
   }
 
   /** Test observability for deterministic assertions; not part of RuntimeAdapter. */
@@ -192,18 +190,16 @@ function abortError(): Error {
   return error;
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
-}
-
-function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
-  if (milliseconds <= 0) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(abortError());
-    const timer = setTimeout(resolve, milliseconds);
-    signal?.addEventListener('abort', () => {
+function delay(milliseconds: number, signals: readonly (AbortSignal | undefined)[]): Promise<void> {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (milliseconds <= 0 || activeSignals.some((signal) => signal.aborted)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
       clearTimeout(timer);
-      reject(abortError());
-    }, { once: true });
+      for (const signal of activeSignals) signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    for (const signal of activeSignals) signal.addEventListener('abort', finish, { once: true });
   });
 }
