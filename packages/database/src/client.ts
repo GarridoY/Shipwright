@@ -1,7 +1,7 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { agentDefinitions, agentRuns, projects, tasks, workItems } from './schema/index.js';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { supportsCapabilities } from '@shipwright/domain';
 
 export function createDatabase(databaseUrl: string) {
@@ -42,6 +42,65 @@ export function createDatabase(databaseUrl: string) {
         const [task] = await db.insert(tasks).values({ ...input, status: 'ready' }).returning();
         if (!task) throw new Error('Task insert returned no record');
         return { ...task, runs: [] };
+      },
+      async dashboard(limit: number) {
+        const [summary, recentTasks] = await Promise.all([
+          db.select({
+            totalTasks: count(tasks.id),
+            activeRuns: sql<number>`count(*) filter (where exists (
+              select 1 from agent_runs active_run
+              where active_run.task_id = ${tasks.id}
+                and active_run.status in ('queued', 'starting', 'running', 'waiting_approval', 'waiting_input')
+            ))::int`,
+            needsAttention: sql<number>`count(*) filter (
+              where exists (
+                select 1 from agent_runs attention_run
+                where attention_run.task_id = ${tasks.id}
+                  and attention_run.status in ('waiting_approval', 'waiting_input')
+              )
+                or (
+                  not exists (
+                    select 1 from agent_runs active_run
+                    where active_run.task_id = ${tasks.id}
+                      and active_run.status in ('queued', 'starting', 'running', 'waiting_approval', 'waiting_input')
+                  )
+                  and (
+                    ${tasks.status} in ('review', 'blocked')
+                    or (
+                      select latest_run.status from agent_runs latest_run
+                      where latest_run.task_id = ${tasks.id}
+                      order by latest_run.attempt desc
+                      limit 1
+                    ) = 'failed'
+                  )
+                )
+            )::int`,
+          }).from(tasks),
+          db.select({
+            id: tasks.id,
+            projectId: tasks.projectId,
+            title: tasks.title,
+            status: tasks.status,
+            agentDefinitionId: tasks.agentDefinitionId,
+            runtime: tasks.runtime,
+            updatedAt: tasks.updatedAt,
+            latestRunStatus: sql<string | null>`(
+              select ${agentRuns.status}
+              from ${agentRuns}
+              where ${agentRuns.taskId} = ${tasks.id}
+              order by ${agentRuns.attempt} desc
+              limit 1
+            )`,
+          }).from(tasks).orderBy(desc(tasks.createdAt), desc(tasks.id)).limit(limit),
+        ]);
+        const counts = summary[0];
+        return {
+          tasks: recentTasks,
+          taskLimit: limit,
+          totalTasks: counts?.totalTasks ?? 0,
+          activeRuns: counts?.activeRuns ?? 0,
+          needsAttention: counts?.needsAttention ?? 0,
+        };
       },
       async workItemBelongsToProject(workItemId: string, projectId: string) {
         return workItemBelongsToProject(workItemId, projectId);

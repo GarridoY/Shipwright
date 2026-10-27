@@ -53,6 +53,7 @@ export const tasks = pgTable('tasks', {
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (table) => [
+  index('tasks_created_at_id_idx').on(table.createdAt.desc(), table.id.desc()),
   index('tasks_project_id_idx').on(table.projectId),
   index('tasks_work_item_id_idx').on(table.workItemId),
   check('tasks_status_check', sql`${table.status} in ('backlog', 'ready', 'in_progress', 'validation', 'review', 'done', 'blocked')`),

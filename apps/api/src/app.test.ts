@@ -74,6 +74,30 @@ function projectDependencies() {
       },
     },
     tasks: {
+      async dashboard(limit: number) {
+        const allTasks = [...taskRecords.values()].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+        const activeStatuses = ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'];
+        const stateFor = (task: TaskRecord) => {
+          const latestRun = task.runs.at(-1)?.status;
+          return activeStatuses.includes(latestRun ?? '') ? latestRun : latestRun === 'failed' ? latestRun : task.status;
+        };
+        return {
+          tasks: allTasks.slice(0, limit).map((task) => ({
+            id: task.id,
+            projectId: task.projectId,
+            title: task.title,
+            status: task.status,
+            agentDefinitionId: task.agentDefinitionId,
+            runtime: task.runtime,
+            updatedAt: task.updatedAt,
+            latestRunStatus: task.runs.at(-1)?.status ?? null,
+          })),
+          taskLimit: limit,
+          totalTasks: allTasks.length,
+          activeRuns: allTasks.filter((task) => activeStatuses.includes(task.runs.at(-1)?.status ?? '')).length,
+          needsAttention: allTasks.filter((task) => ['waiting_approval', 'waiting_input', 'review', 'blocked', 'failed'].includes(stateFor(task) ?? '')).length,
+        };
+      },
       async create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>) {
         const now = new Date();
         const task = { ...input, id: randomUUID(), status: 'ready', createdAt: now, updatedAt: now, runs: [] };
@@ -108,6 +132,10 @@ function projectDependencies() {
     definitionId,
     workItemOwners,
     taskCount: () => taskRecords.size,
+    setRunStatus: (taskId: string, status: string) => {
+      const run = taskRecords.get(taskId)?.runs.at(-1);
+      if (run) run.status = status;
+    },
   };
 }
 
@@ -231,6 +259,15 @@ describe('GET /health', () => {
     const detail = await app.inject({ method: 'GET', url: `/api/tasks/${task.id}` });
     expect(detail.statusCode).toBe(200);
     expect(detail.json().runs).toHaveLength(1);
+    const dashboard = await app.inject({ method: 'GET', url: '/api/dashboard' });
+    expect(dashboard.statusCode).toBe(200);
+    expect(dashboard.json()).toMatchObject({
+      taskLimit: 8,
+      totalTasks: 1,
+      activeRuns: 1,
+      needsAttention: 0,
+      tasks: [{ id: task.id, title: 'Implement feature', latestRunStatus: 'queued' }],
+    });
     const duplicate = await app.inject({ method: 'POST', url: `/api/tasks/${task.id}/runs` });
     expect(duplicate.statusCode).toBe(409);
   });
@@ -244,6 +281,46 @@ describe('GET /health', () => {
     expect(invalid.statusCode).toBe(400);
     const missing = await app.inject({ method: 'GET', url: `/api/tasks/${randomUUID()}` });
     expect(missing.statusCode).toBe(404);
+  });
+
+  it('returns a sanitized error when dashboard activity cannot be loaded', async () => {
+    const dependencies = projectDependencies();
+    const app = await buildApi({
+      ...dependencies,
+      tasks: { ...dependencies.tasks, dashboard: async () => { throw new Error('sensitive database detail'); } },
+    });
+    apps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/api/dashboard' });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: 'Unable to load dashboard' });
+    expect(response.body).not.toContain('sensitive database detail');
+  });
+
+  it('bounds recent dashboard rows while preserving counts across older tasks', async () => {
+    const dependencies = projectDependencies();
+    const app = await buildApi(dependencies);
+    apps.push(app);
+    const projectId = randomUUID();
+    const oldest = await dependencies.tasks.create({ projectId, workItemId: null, title: 'Oldest task', objective: 'Oldest', acceptanceCriteria: [], agentDefinitionId: dependencies.definitionId, runtime: 'fake' });
+    await dependencies.tasks.startRun(oldest.id, []);
+    dependencies.setRunStatus(oldest.id, 'waiting_approval');
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    for (let index = 0; index < 9; index += 1) {
+      await dependencies.tasks.create({ projectId, workItemId: null, title: `Recent task ${index}`, objective: 'Recent', acceptanceCriteria: [], agentDefinitionId: dependencies.definitionId, runtime: 'fake' });
+    }
+
+    const response = await app.inject({ method: 'GET', url: '/api/dashboard' });
+    const dashboard = response.json();
+
+    expect(response.statusCode).toBe(200);
+    expect(dashboard.taskLimit).toBe(8);
+    expect(dashboard.totalTasks).toBe(10);
+    expect(dashboard.tasks).toHaveLength(8);
+    expect(dashboard.tasks.some((task: { id: string }) => task.id === oldest.id)).toBe(false);
+    expect(dashboard.activeRuns).toBe(1);
+    expect(dashboard.needsAttention).toBe(1);
   });
 
   it('allows users to create and list definitions for available runtimes', async () => {
