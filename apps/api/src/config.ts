@@ -15,8 +15,5 @@ export function resolveApiHost(host: string | undefined): string {
 }
 
 export function resolveProjectRoots(value: string | undefined): string[] {
-  if (!value?.trim()) throw new Error('PROJECT_ALLOWED_ROOTS must contain at least one directory');
-  const roots = value.split(';').map((root) => root.trim()).filter(Boolean);
-  if (roots.length === 0) throw new Error('PROJECT_ALLOWED_ROOTS must contain at least one directory');
-  return roots;
+  return (value ?? '').split(';').map((root) => root.trim()).filter(Boolean);
 }
