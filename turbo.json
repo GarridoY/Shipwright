@@ -3,7 +3,7 @@
   "tasks": {
     "dev": {
       "dependsOn": ["^build"],
-      "env": ["DATABASE_URL", "API_HOST", "API_PORT", "NEXT_PUBLIC_API_URL"],
+      "env": ["DATABASE_URL", "API_HOST", "API_PORT", "NEXT_PUBLIC_API_URL", "PROJECT_ALLOWED_ROOTS"],
       "cache": false,
       "persistent": true
     },
