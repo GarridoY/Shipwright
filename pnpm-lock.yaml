@@ -115,6 +115,8 @@ importers:
 
   packages/domain: {}
 
+  packages/runtime-core: {}
+
 packages:
 
   '@drizzle-team/brocli@0.10.2':
