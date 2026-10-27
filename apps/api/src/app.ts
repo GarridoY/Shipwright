@@ -5,6 +5,7 @@ import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { waitForResponseDrain } from './sse-backpressure.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -297,9 +298,8 @@ export async function buildApi(dependencies: ApiDependencies) {
     });
     const abort = () => response.end();
     response.once('close', abort);
-    const waitForDrain = () => new Promise<void>((resolve) => response.once('drain', resolve));
     try {
-      while (!response.destroyed && !response.writableEnded) {
+      while (!response.destroyed && !response.writableEnded && response.writable) {
         const events = await dependencies.runEvents.listAfter(request.params.id, cursor, 100);
         for (const event of events) {
           if (!isValidPersistedEvent(event, request.params.id, cursor)) {
@@ -312,11 +312,12 @@ export async function buildApi(dependencies: ApiDependencies) {
             response.end();
             return;
           }
-          if (!response.write(`id: ${event.sequence}\nevent: run-event\ndata: ${encoded}\n\n`)) await waitForDrain();
+          if (!response.write(`id: ${event.sequence}\nevent: run-event\ndata: ${encoded}\n\n`) &&
+              !(await waitForResponseDrain(response))) return;
           cursor = event.sequence;
         }
         if (events.length === 0) {
-          if (!response.write(': keep-alive\n\n')) await waitForDrain();
+          if (!response.write(': keep-alive\n\n') && !(await waitForResponseDrain(response))) return;
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
       }
@@ -385,6 +386,10 @@ function isValidPersistedEvent(event: PersistedRunEvent, runId: string, cursor: 
     case 'task.status_changed': return typeof payload.from === 'string' && typeof payload.to === 'string';
     case 'run.output': return (payload.stream === 'stdout' || payload.stream === 'stderr') && typeof payload.text === 'string';
     case 'run.activity': return ['reading', 'editing', 'testing', 'thinking'].includes(String(payload.activity));
+    case 'run.structured_output': return 'value' in payload;
+    case 'run.interrupted': return Object.keys(payload).length === 0;
+    case 'run.completed': return Number.isInteger(payload.exitCode);
+    case 'run.failed': return typeof payload.code === 'string' && typeof payload.message === 'string';
     case 'approval.requested': return typeof payload.approvalRequestId === 'string' && typeof payload.operation === 'string';
     case 'approval.resolved': return typeof payload.approvalRequestId === 'string' && (payload.decision === 'approved' || payload.decision === 'denied');
     case 'artifact.created': return typeof payload.artifactId === 'string' && typeof payload.kind === 'string';

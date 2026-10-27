@@ -14,6 +14,7 @@
     "@fastify/cors": "^10.0.2",
     "@shipwright/contracts": "workspace:*",
     "@shipwright/database": "workspace:*",
+    "@shipwright/runtime-core": "workspace:*",
     "fastify": "^5.2.1"
   },
   "devDependencies": {

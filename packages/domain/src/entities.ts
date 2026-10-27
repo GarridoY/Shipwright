@@ -87,6 +87,11 @@ export interface RunEventPayloads {
   'run.status_changed': { from: RunStatus | null; to: RunStatus };
   'task.status_changed': { from: TaskStatus; to: TaskStatus };
   'run.output': { stream: 'stdout' | 'stderr'; text: string };
+  'run.activity': { activity: 'reading' | 'editing' | 'testing' | 'thinking' };
+  'run.structured_output': { value: unknown };
+  'run.interrupted': Record<string, never>;
+  'run.completed': { exitCode: number };
+  'run.failed': { code: string; message: string };
   'approval.requested': { approvalRequestId: EntityId; operation: string };
   'approval.resolved': { approvalRequestId: EntityId; decision: 'approved' | 'denied' };
   'artifact.created': { artifactId: EntityId; kind: string };
