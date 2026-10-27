@@ -377,4 +377,57 @@ describe('GET /health', () => {
     expect(otherProject.statusCode).toBe(400);
     expect(dependencies.taskCount()).toBe(1);
   });
+
+  it('validates the replay cursor and reports unavailable persistence explicitly', async () => {
+    const dependencies = projectDependencies();
+    const app = await buildApi(dependencies);
+    apps.push(app);
+    const unavailable = await app.inject({ method: 'GET', url: `/api/runs/${randomUUID()}/events/stream` });
+    expect(unavailable.statusCode).toBe(503);
+
+    const configured = await buildApi({
+      ...dependencies,
+      runEvents: { async listAfter() { return []; } },
+    });
+    apps.push(configured);
+    const malformed = await configured.inject({
+      method: 'GET',
+      url: `/api/runs/${randomUUID()}/events/stream`,
+      headers: { 'last-event-id': 'not-a-sequence' },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toEqual({ error: 'Last-Event-ID must be a non-negative event sequence' });
+  });
+
+  it('replays persisted events in sequence after Last-Event-ID and redacts credentials', async () => {
+    const runId = randomUUID();
+    const timestamp = new Date();
+    const stored = [2, 3, 4].map((sequence) => ({
+      id: randomUUID(), runId, schemaVersion: 1, sequence, type: 'run.output', timestamp,
+      payload: sequence === 4 ? {} : { stream: 'stdout', text: sequence === 2 ? 'Bearer abc.def token=private' : 'done' },
+    }));
+    stored[2]!.type = 'unknown.event';
+    const dependencies = projectDependencies();
+    const app = await buildApi({
+      ...dependencies,
+      runEvents: { async listAfter(id, sequence) { return id === runId ? stored.filter((event) => event.sequence > sequence) : []; } },
+    });
+    apps.push(app);
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const response = await fetch(`${address}/api/runs/${runId}/events/stream`, { headers: { 'last-event-id': '1' } });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    let output = '';
+    while (!output.includes('id: 3')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      output += new TextDecoder().decode(chunk.value);
+    }
+    await reader.cancel();
+    expect(output.indexOf('id: 2')).toBeLessThan(output.indexOf('id: 3'));
+    expect(output).toContain('Bearer [REDACTED]');
+    expect(output).not.toContain('abc.def');
+    expect(output).not.toContain('private');
+    expect(output).not.toContain('id: 4');
+  });
 });

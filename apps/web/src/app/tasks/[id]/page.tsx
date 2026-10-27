@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 
 type Run = { id: string; attempt: number; status: string; runtime: string; agentDefinitionId: string; createdAt: string };
 type Task = { id: string; title: string; objective: string; acceptanceCriteria: string[]; status: string; runtime: string | null; agentDefinitionId: string | null; runs: Run[] };
+type RunEvent = { runId: string; sequence: number; type: string; timestamp: string; payload: Record<string, unknown> };
 
 function statusTone(status: string) {
   const normalized = status.toLowerCase();
@@ -25,7 +26,11 @@ export default function TaskDetail() {
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState('');
   const [starting, setStarting] = useState(false);
+  const [activity, setActivity] = useState('No recent activity');
+  const [attention, setAttention] = useState('None');
+  const [events, setEvents] = useState<RunEvent[]>([]);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:4000';
+  const activeRunIds = (task?.runs.filter((run) => ['queued', 'starting', 'running', 'waiting_approval', 'waiting_input'].includes(run.status)) ?? []).map((run) => run.id).join(',');
 
   const load = useCallback(async () => {
     try {
@@ -40,6 +45,31 @@ export default function TaskDetail() {
   }, [apiUrl, id]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!activeRunIds) return;
+    const sources = activeRunIds.split(',').map((runId) => {
+      const source = new EventSource(`${apiUrl}/api/runs/${encodeURIComponent(runId)}/events/stream`);
+      let lastSequence = 0;
+      source.addEventListener('run-event', (message) => {
+        try {
+          const event = JSON.parse((message as MessageEvent<string>).data) as RunEvent;
+          if (!Number.isSafeInteger(event.sequence) || event.sequence <= lastSequence) return;
+          lastSequence = event.sequence;
+          const activityValue = event.payload.activity;
+          if (typeof activityValue === 'string') setActivity(activityValue);
+          if (event.type === 'approval.requested') setAttention('Approval required');
+          if (event.type === 'approval.resolved') setAttention('None');
+          setEvents((current) => current.some((item) => item.runId === event.runId && item.sequence === event.sequence)
+            ? current : [...current, event].slice(-100));
+        } catch {
+          setAttention('Malformed event received');
+        }
+      });
+      return source;
+    });
+    return () => sources.forEach((source) => source.close());
+  }, [apiUrl, activeRunIds]);
 
   async function startRun() {
     setStarting(true);
@@ -73,11 +103,13 @@ export default function TaskDetail() {
         {!task && !error && <div className="panel empty-state"><strong>Loading task…</strong>Getting the latest task and run details.</div>}
         {task && <>
           <div className="page-heading task-title-row"><div><span className="eyebrow">TASK / {task.id.slice(0, 8).toUpperCase()}</span><h1>{task.title}</h1><p className="task-objective">{task.objective}</p></div><span className={`task-status ${statusTone(task.status)}`}><i></i>{displayStatus(task.status)}</span></div>
-          <div className="task-meta-grid"><div className="meta-card"><span>Agent definition</span><strong>{task.agentDefinitionId ?? 'Not assigned'}</strong></div><div className="meta-card"><span>Runtime</span><strong>{task.runtime ?? 'Not configured'}</strong></div></div>
+           <div className="task-meta-grid"><div className="meta-card"><span>Agent definition</span><strong>{task.agentDefinitionId ?? 'Not assigned'}</strong></div><div className="meta-card"><span>Runtime</span><strong>{task.runtime ?? 'Not configured'}</strong></div></div>
+           <div className="task-meta-grid"><div className="meta-card"><span>Activity</span><strong>{activity}</strong></div><div className="meta-card"><span>Attention</span><strong>{attention}</strong></div></div>
           {!task.agentDefinitionId && <p className="notice" role="status">This legacy task has no agent definition. Create a new task with an agent definition before starting a run.</p>}
           <section className="panel task-panel" aria-labelledby="criteria-heading"><div className="panel-heading"><div><h2 id="criteria-heading">Acceptance criteria</h2><p>{task.acceptanceCriteria.length} item{task.acceptanceCriteria.length === 1 ? '' : 's'} to validate</p></div></div>{task.acceptanceCriteria.length === 0 ? <div className="empty-state">No acceptance criteria were provided for this task.</div> : <ul className="criteria-list">{task.acceptanceCriteria.map((criterion, index) => <li key={`${index}-${criterion}`}>{criterion}</li>)}</ul>}</section>
           <section className="panel task-panel" aria-labelledby="runs-heading"><div className="panel-heading"><div><h2 id="runs-heading">Run attempts</h2><p>Task status and execution attempts are tracked separately.</p></div><span className="overview-card-label">{task.runs.length} attempt{task.runs.length === 1 ? '' : 's'}</span></div>
-            {task.runs.length === 0 ? <div className="empty-state"><strong>No run attempts yet</strong>Start a run when you’re ready to put this task in motion.</div> : <div className="run-list">{task.runs.map((run) => <article className="run-row" key={run.id}><span className="run-index">{String(run.attempt).padStart(2, '0')}</span><span className="run-copy"><strong>Attempt {run.attempt}</strong><small>{run.runtime} · {run.agentDefinitionId}</small></span><span className={`task-status ${statusTone(run.status)}`}><i></i>{displayStatus(run.status)}</span></article>)}</div>}
+             {task.runs.length === 0 ? <div className="empty-state"><strong>No run attempts yet</strong>Start a run when you’re ready to put this task in motion.</div> : <div className="run-list">{task.runs.map((run) => <article className="run-row" key={run.id}><span className="run-index">{String(run.attempt).padStart(2, '0')}</span><span className="run-copy"><strong>Attempt {run.attempt}</strong><small>{run.runtime} · {run.agentDefinitionId}</small></span><span className={`task-status ${statusTone(run.status)}`}><i></i>{displayStatus(run.status)}</span></article>)}</div>}
+             {events.length > 0 && <ol className="criteria-list" aria-label="Recent run events">{events.map((event) => <li key={`${event.runId}:${event.sequence}`}>Run event {event.sequence}: {displayStatus(event.type)}</li>)}</ol>}
             <div className="run-action"><p>{task.runtime ? `Ready to start a ${task.runtime} run for this task.` : 'A configured agent definition and runtime are required to start a run.'}</p><button className="primary-button" type="button" onClick={startRun} disabled={starting || !task.agentDefinitionId || !task.runtime}>{starting ? 'Starting…' : 'Start run'} <span aria-hidden="true">↗</span></button></div>
           </section>
         </>}

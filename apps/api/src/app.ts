@@ -28,7 +28,24 @@ export interface ApiDependencies {
   tasks: TaskStore;
   agentDefinitions: AgentDefinitionStore;
   runtimes: RuntimeCatalog;
+  runEvents?: RunEventStore;
 }
+
+export interface PersistedRunEvent {
+  id: string;
+  runId: string;
+  schemaVersion: number;
+  sequence: number;
+  type: string;
+  timestamp: Date;
+  payload: Record<string, unknown>;
+}
+
+export interface RunEventStore {
+  listAfter(runId: string, sequence: number, limit?: number): Promise<PersistedRunEvent[]>;
+}
+
+const MAX_EVENT_BYTES = 64 * 1024;
 
 export interface AgentDefinitionRecord {
   id: string;
@@ -258,6 +275,58 @@ export async function buildApi(dependencies: ApiDependencies) {
     return task;
   });
 
+  app.get<{ Params: { id: string } }>('/api/runs/:id/events/stream', async (request, reply) => {
+    if (!dependencies.runEvents) {
+      reply.code(503);
+      return { error: 'Run event streaming is unavailable' };
+    }
+    const rawCursor = request.headers['last-event-id'];
+    const cursorText = typeof rawCursor === 'string' ? rawCursor : '0';
+    if (!/^(0|[1-9][0-9]*)$/.test(cursorText) || !Number.isSafeInteger(Number(cursorText))) {
+      reply.code(400);
+      return { error: 'Last-Event-ID must be a non-negative event sequence' };
+    }
+    let cursor = Number(cursorText);
+    reply.hijack();
+    const response = reply.raw;
+    response.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    const abort = () => response.end();
+    response.once('close', abort);
+    const waitForDrain = () => new Promise<void>((resolve) => response.once('drain', resolve));
+    try {
+      while (!response.destroyed && !response.writableEnded) {
+        const events = await dependencies.runEvents.listAfter(request.params.id, cursor, 100);
+        for (const event of events) {
+          if (!isValidPersistedEvent(event, request.params.id, cursor)) {
+            response.end();
+            return;
+          }
+          const safeEvent = redactEvent(event);
+          const encoded = JSON.stringify(safeEvent);
+          if (Buffer.byteLength(encoded, 'utf8') > MAX_EVENT_BYTES) {
+            response.end();
+            return;
+          }
+          if (!response.write(`id: ${event.sequence}\nevent: run-event\ndata: ${encoded}\n\n`)) await waitForDrain();
+          cursor = event.sequence;
+        }
+        if (events.length === 0) {
+          if (!response.write(': keep-alive\n\n')) await waitForDrain();
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+    } catch {
+      if (!response.destroyed && !response.writableEnded) response.end();
+    } finally {
+      response.off('close', abort);
+    }
+  });
+
   app.post<{ Params: { id: string } }>('/api/tasks/:id/runs', async (request, reply) => {
     try {
       const task = await dependencies.tasks.get(request.params.id);
@@ -304,4 +373,37 @@ async function readBranch(repositoryPath: string): Promise<string | null> {
 
 function isDuplicate(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === '23505';
+}
+
+function isValidPersistedEvent(event: PersistedRunEvent, runId: string, cursor: number): boolean {
+  if (event.runId !== runId || !Number.isSafeInteger(event.sequence) || event.sequence <= cursor ||
+      event.schemaVersion !== 1 || !(event.timestamp instanceof Date) || Number.isNaN(event.timestamp.getTime()) ||
+      typeof event.payload !== 'object' || event.payload === null || Array.isArray(event.payload)) return false;
+  const payload = event.payload;
+  switch (event.type) {
+    case 'run.status_changed': return (payload.from === null || typeof payload.from === 'string') && typeof payload.to === 'string';
+    case 'task.status_changed': return typeof payload.from === 'string' && typeof payload.to === 'string';
+    case 'run.output': return (payload.stream === 'stdout' || payload.stream === 'stderr') && typeof payload.text === 'string';
+    case 'run.activity': return ['reading', 'editing', 'testing', 'thinking'].includes(String(payload.activity));
+    case 'approval.requested': return typeof payload.approvalRequestId === 'string' && typeof payload.operation === 'string';
+    case 'approval.resolved': return typeof payload.approvalRequestId === 'string' && (payload.decision === 'approved' || payload.decision === 'denied');
+    case 'artifact.created': return typeof payload.artifactId === 'string' && typeof payload.kind === 'string';
+    case 'run.checkpointed': return typeof payload.checkpointId === 'string';
+    default: return false;
+  }
+}
+
+function redactEvent(event: PersistedRunEvent): PersistedRunEvent {
+  const redact = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(redact);
+    if (typeof value === 'string') return value
+      .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
+      .replace(/\b(token|password|secret|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]');
+    if (typeof value !== 'object' || value === null) return value;
+    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+      key,
+      /token|password|secret|api[_-]?key|credential/i.test(key) ? '[REDACTED]' : redact(nested),
+    ]));
+  };
+  return { ...event, payload: redact(event.payload) as Record<string, unknown> };
 }
