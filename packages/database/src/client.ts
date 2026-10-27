@@ -43,6 +43,17 @@ export function createDatabase(databaseUrl: string) {
         if (!task) throw new Error('Task insert returned no record');
         return { ...task, runs: [] };
       },
+      async list() {
+        const taskRecords = await db.select().from(tasks).orderBy(desc(tasks.createdAt));
+        const runs = await db.select().from(agentRuns).orderBy(desc(agentRuns.attempt));
+        const runsByTask = new Map<string, typeof runs>();
+        for (const run of runs) {
+          const taskRuns = runsByTask.get(run.taskId) ?? [];
+          taskRuns.push(run);
+          runsByTask.set(run.taskId, taskRuns);
+        }
+        return taskRecords.map((task) => ({ ...task, runs: runsByTask.get(task.id) ?? [] }));
+      },
       async workItemBelongsToProject(workItemId: string, projectId: string) {
         return workItemBelongsToProject(workItemId, projectId);
       },

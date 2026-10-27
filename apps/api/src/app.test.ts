@@ -74,6 +74,7 @@ function projectDependencies() {
       },
     },
     tasks: {
+      async list() { return [...taskRecords.values()].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime()); },
       async create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>) {
         const now = new Date();
         const task = { ...input, id: randomUUID(), status: 'ready', createdAt: now, updatedAt: now, runs: [] };
@@ -231,6 +232,10 @@ describe('GET /health', () => {
     const detail = await app.inject({ method: 'GET', url: `/api/tasks/${task.id}` });
     expect(detail.statusCode).toBe(200);
     expect(detail.json().runs).toHaveLength(1);
+    const listed = await app.inject({ method: 'GET', url: '/api/tasks' });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toHaveLength(1);
+    expect(listed.json()[0]).toMatchObject({ id: task.id, title: 'Implement feature', runs: [{ attempt: 1, status: 'queued' }] });
     const duplicate = await app.inject({ method: 'POST', url: `/api/tasks/${task.id}/runs` });
     expect(duplicate.statusCode).toBe(409);
   });
@@ -244,6 +249,21 @@ describe('GET /health', () => {
     expect(invalid.statusCode).toBe(400);
     const missing = await app.inject({ method: 'GET', url: `/api/tasks/${randomUUID()}` });
     expect(missing.statusCode).toBe(404);
+  });
+
+  it('returns a sanitized error when the task list cannot be loaded', async () => {
+    const dependencies = projectDependencies();
+    const app = await buildApi({
+      ...dependencies,
+      tasks: { ...dependencies.tasks, list: async () => { throw new Error('sensitive database detail'); } },
+    });
+    apps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/api/tasks' });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: 'Unable to load tasks' });
+    expect(response.body).not.toContain('sensitive database detail');
   });
 
   it('allows users to create and list definitions for available runtimes', async () => {

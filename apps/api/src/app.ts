@@ -80,6 +80,7 @@ export interface RunRecord {
 }
 
 export interface TaskStore {
+  list(): Promise<TaskRecord[]>;
   create(input: Omit<TaskRecord, 'id' | 'createdAt' | 'updatedAt' | 'runs' | 'status'>): Promise<TaskRecord>;
   workItemBelongsToProject(workItemId: string, projectId: string): Promise<boolean>;
   get(id: string): Promise<TaskRecord | null>;
@@ -215,6 +216,15 @@ export async function buildApi(dependencies: ApiDependencies) {
     } catch {
       reply.code(400);
       return { error: 'Task references are invalid or could not be saved' };
+    }
+  });
+
+  app.get('/api/tasks', async (_request, reply) => {
+    try {
+      return await dependencies.tasks.list();
+    } catch {
+      reply.code(500);
+      return { error: 'Unable to load tasks' };
     }
   });
 
