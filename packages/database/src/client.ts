@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { agentDefinitions, agentRuns, projects, tasks, workItems } from './schema/index.js';
+import { agentDefinitions, agentRuns, projects, runEvents, tasks, workItems } from './schema/index.js';
 import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { supportsCapabilities } from '@shipwright/domain';
 
@@ -131,6 +131,29 @@ export function createDatabase(databaseUrl: string) {
           if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') return { kind: 'active' as const };
           throw error;
         }
+      },
+    },
+    runEvents: {
+      async listAfter(runId: string, sequence: number, limit = 100) {
+        return db.select().from(runEvents)
+          .where(and(eq(runEvents.runId, runId), sql`${runEvents.sequence} > ${sequence}`))
+          .orderBy(runEvents.sequence).limit(limit);
+      },
+      async append(input: { runId: string; schemaVersion: number; type: string; payload: Record<string, unknown>; timestamp?: Date }) {
+        return db.transaction(async (transaction) => {
+          // Lock the run row so concurrent writers allocate distinct, ordered sequence numbers.
+          const [run] = await transaction.select({ id: agentRuns.id }).from(agentRuns)
+            .where(eq(agentRuns.id, input.runId)).for('update');
+          if (!run) throw new Error('Run not found');
+          const [latest] = await transaction.select({ sequence: runEvents.sequence }).from(runEvents)
+            .where(eq(runEvents.runId, input.runId)).orderBy(desc(runEvents.sequence)).limit(1);
+          const [event] = await transaction.insert(runEvents).values({
+            ...input,
+            sequence: (latest?.sequence ?? 0) + 1,
+          }).returning();
+          if (!event) throw new Error('Run event insert returned no record');
+          return event;
+        });
       },
     },
     async checkConnection(): Promise<void> {
